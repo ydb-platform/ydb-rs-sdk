@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
@@ -41,7 +42,7 @@ pub(crate) struct CallOptions {
     /// Constant application-chosen name for the named query metric rows
     /// (`ydb_query_named_*`); recorded into the `ydb.query.name` span field too,
     /// so traces and metric series correlate.
-    pub query_name: Option<&'static str>,
+    pub query_name: Option<Cow<'static, str>>,
 }
 
 impl CallOptions {
@@ -529,7 +530,7 @@ pub(super) async fn client_begin_stream_once(
     opts: &CallOptions,
     concurrent_result_sets: bool,
 ) -> YdbResult<OpenedClientQueryStream> {
-    if let Some(query_name) = opts.query_name {
+    if let Some(query_name) = opts.query_name.as_deref() {
         tracing::Span::current().record("ydb.query.name", query_name);
     }
     if opts.implicit_session {
@@ -763,7 +764,7 @@ pub(crate) async fn tx_begin_stream(
         !opts.implicit_session,
         "implicit_session is only available on QueryClient one-shot builders"
     );
-    if let Some(query_name) = opts.query_name {
+    if let Some(query_name) = opts.query_name.as_deref() {
         tracing::Span::current().record("ydb.query.name", query_name);
     }
     tx.active()?;

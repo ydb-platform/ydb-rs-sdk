@@ -1,10 +1,11 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::future::IntoFuture;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::client::TimeoutSettings;
-use crate::client_metrics::{QueryOperation, query_names::is_valid_query_name};
+use crate::client_metrics::QueryOperation;
 use crate::closure;
 use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
@@ -47,16 +48,12 @@ pub struct ExecuteScriptBuilder<'a> {
 /// [`crate::client_query::builders::CallBuilder::with_name`].
 macro_rules! with_name_for_script_builder {
     () => {
-        /// Give the operation a constant application-chosen name for the named
-        /// query metric rows (`ydb_query_named_*`); see
+        /// Give the operation an application-chosen name for the named query
+        /// metric rows (`ydb_query_named_*`); see
         /// [`crate::client_query::builders::CallBuilder::with_name`] for the
-        /// format, validation, and limit rules.
-        pub fn with_name(mut self, query_name: &'static str) -> Self {
-            debug_assert!(
-                is_valid_query_name(query_name),
-                "query_name must match [a-z0-9_]{{1,64}}, got '{query_name}'"
-            );
-            self.opts.query_name = Some(query_name);
+        /// naming and validation rules.
+        pub fn with_name(mut self, query_name: impl Into<Cow<'static, str>>) -> Self {
+            self.opts.query_name = Some(query_name.into());
             self
         }
     };
@@ -105,7 +102,7 @@ impl<'a> IntoFuture for ExecuteScriptBuilder<'a> {
         Box::pin(async move {
             let recorder = Arc::clone(&self.ctx.metrics_recorder);
             let start = Instant::now();
-            let query_name = self.opts.query_name;
+            let query_name = self.opts.query_name.clone();
             let result = async {
                 let results_ttl = self.results_ttl.ok_or_else(|| {
                     YdbError::Custom("execute_script requires `.results_ttl(...)`".into())
@@ -119,7 +116,7 @@ impl<'a> IntoFuture for ExecuteScriptBuilder<'a> {
             super::builders::record_query_operation(
                 &recorder,
                 QueryOperation::ExecuteScript,
-                query_name,
+                query_name.as_deref(),
                 start,
                 &result,
                 None,
@@ -181,7 +178,7 @@ impl<'a> IntoFuture for FetchScriptResultsBuilder<'a> {
         Box::pin(async move {
             let recorder = Arc::clone(&self.ctx.metrics_recorder);
             let start = Instant::now();
-            let query_name = self.opts.query_name;
+            let query_name = self.opts.query_name.clone();
             let mut sizes = None;
             let result = client_fetch_script_results(
                 self.ctx,
@@ -199,7 +196,7 @@ impl<'a> IntoFuture for FetchScriptResultsBuilder<'a> {
             super::builders::record_query_operation(
                 &recorder,
                 QueryOperation::FetchScriptResults,
-                query_name,
+                query_name.as_deref(),
                 start,
                 &result,
                 sizes,

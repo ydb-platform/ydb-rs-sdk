@@ -130,11 +130,12 @@ use these exact strings:
   `ydb_query_named_operation_duration_seconds{query_name}`,
   `ydb_query_named_errors_total{query_name,status_code}`,
   `ydb_query_named_result_rows{query_name}`,
-  `ydb_query_named_result_bytes{query_name}`. The name must match
-  `[a-z0-9_]{1,64}` (constant from application code, never runtime data);
-  malformed names land in `query_name="__invalid__"` and names beyond the
-  per-recorder cap (`ClientBuilder::with_metrics_max_query_names`, default 512)
-  collapse into `query_name="__other__"`.
+  `ydb_query_named_result_bytes{query_name}`. Use constants or a small, bounded
+  set of generated names (for example, one per request handler), matching
+  `[a-z0-9_]{1,64}`. Static strings and owned `String` values are both accepted.
+  Never use query text, parameters, identifiers, or other unbounded runtime
+  data. The default metrics adapter logs one warning per malformed name and
+  records it under `query_name="__invalid__"` without interrupting the query.
 
 ## Known limitations
 

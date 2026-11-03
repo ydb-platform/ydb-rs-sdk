@@ -15,11 +15,6 @@ use crate::client_metrics::{
 
 const DEFAULT_DRIVER_NAME: &str = "main";
 
-/// Default cap of unique `query_name` values admitted by one recorder; valid
-/// names beyond it collapse into the `__other__` bucket. Configurable per
-/// client through [`crate::ClientBuilder::with_metrics_max_query_names`].
-pub(crate) const DEFAULT_MAX_QUERY_NAMES: usize = 512;
-
 /// Number of `result` label values for `ydb_query_operations_total`; sizes its
 /// per-operation handle arrays. Indexed by `usize::from(!ok)`.
 pub(crate) const QUERY_RESULT_COUNT: usize = 2;
@@ -116,8 +111,8 @@ pub(crate) struct MetricsNames {
     pub query_result_bytes: [HistogramHandle; QueryOperation::LABEL_COUNT],
     pub query_transactions_total: [CounterHandle; QueryTransactionResult::LABEL_COUNT],
     pub query_transaction_duration_seconds: HistogramHandle,
-    /// Registry of admitted query names for the named query series
-    /// (`ydb_query_named_*`), with the unique-name cap applied.
+    /// Canonical query-name ids for the named query series
+    /// (`ydb_query_named_*`).
     pub query_names: super::query_names::QueryNameRegistry,
     /// Endpoint label policy and bounded set of admitted endpoint values.
     pub endpoints: EndpointRegistry,

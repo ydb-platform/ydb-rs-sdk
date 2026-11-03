@@ -9,8 +9,7 @@ mod mock_server;
 use std::time::Duration;
 
 use ydb::{
-    Client, ClientBuilder, QueryExecutor, RetrySettings, Transaction, YdbResult,
-    YdbResultWithCustomerErr, closure,
+    Client, QueryExecutor, RetrySettings, Transaction, YdbResult, YdbResultWithCustomerErr, closure,
 };
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
@@ -274,15 +273,15 @@ async fn named_query_records_common_and_named_series() -> YdbResult<()> {
         .await?;
     while stream.next_result_set().await?.is_some() {}
     stream.close().await?;
-    // Named script operations.
+    // Both script builders accept owned names.
     let operation = qc
         .execute_script("SELECT 1 AS val")
-        .with_name("named_script")
+        .with_name(String::from("named_script"))
         .results_ttl(Duration::from_secs(3600))
         .await?;
     let _fetched = qc
         .fetch_script_results(operation.id)
-        .with_name("named_fetch")
+        .with_name(String::from("named_fetch"))
         .await?;
     // Named call inside an interactive transaction.
     client
@@ -450,25 +449,18 @@ async fn failed_named_query_records_named_error_series() -> YdbResult<()> {
 
 #[tokio::test]
 #[tracing_test::traced_test]
-async fn query_name_limit_collapses_to_other_bucket() -> YdbResult<()> {
+async fn static_and_owned_query_names_share_series() -> YdbResult<()> {
     let (registry, recorder) = test_recorder();
     let handler = QueryRowHandler::new(tokio::sync::mpsc::unbounded_channel().0);
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = ClientBuilder::new_from_connection_string(format!(
-        "{}{DATABASE}?use_discovery=false",
-        server.endpoint()
-    ))?
-    .with_metrics_max_query_names(1)
-    .with_metrics_recorder(backend(recorder))
-    .build()
-    .await?;
+    let client = make_client(&server, recorder).await?;
 
     let mut qc = client.query_client();
     let _row = QueryExecutor::query_row(&mut qc, "SELECT 42 AS val")
-        .with_name("first_named")
+        .with_name("shared_named")
         .await?;
     let _row = QueryExecutor::query_row(&mut qc, "SELECT 42 AS val")
-        .with_name("second_named")
+        .with_name(String::from("shared_named"))
         .await?;
 
     assert_eq!(
@@ -476,30 +468,54 @@ async fn query_name_limit_collapses_to_other_bucket() -> YdbResult<()> {
             &registry,
             "ydb_query_named_operations_total",
             "query_name",
-            "first_named"
+            "shared_named"
         ),
-        1,
-        "the first name must be admitted"
+        2,
+        "static and owned forms of one name must share their named series"
     );
+    assert_eq!(
+        counter_value_with_label(
+            &registry,
+            "ydb_query_operations_total",
+            "operation",
+            "query_row"
+        ),
+        2
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn invalid_query_name_does_not_interrupt_query() -> YdbResult<()> {
+    let (registry, recorder) = test_recorder();
+    let handler = QueryRowHandler::new(tokio::sync::mpsc::unbounded_channel().0);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server, recorder).await?;
+
+    let mut qc = client.query_client();
+    let _row = QueryExecutor::query_row(&mut qc, "SELECT 42 AS val")
+        .with_name(String::from("Invalid-Name"))
+        .await?;
+
     assert_eq!(
         counter_value_with_label(
             &registry,
             "ydb_query_named_operations_total",
             "query_name",
-            "second_named"
+            "__invalid__"
         ),
-        0,
-        "a name beyond the limit must not appear as its own series"
+        1
     );
     assert_eq!(
         counter_value_with_label(
             &registry,
-            "ydb_query_named_operations_total",
-            "query_name",
-            "__other__"
+            "ydb_query_operations_total",
+            "operation",
+            "query_row"
         ),
-        1,
-        "names beyond the limit must collapse into the __other__ bucket"
+        1
     );
 
     Ok(())

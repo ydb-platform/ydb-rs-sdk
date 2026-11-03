@@ -244,7 +244,6 @@ pub struct ClientBuilder {
     metrics_labels: Vec<(String, String)>,
     metrics_detail: MetricsDetail,
     metrics_max_endpoints: Option<usize>,
-    metrics_max_query_names: Option<usize>,
 }
 
 impl ClientBuilder {
@@ -293,12 +292,7 @@ impl ClientBuilder {
             Some(max_endpoints) => metrics_backend.with_max_endpoints(max_endpoints),
             None => metrics_backend,
         };
-        let metrics_backend: Arc<dyn MetricsRecorder> = match self.metrics_max_query_names.take() {
-            Some(max_query_names) => {
-                Arc::new(metrics_backend.with_max_query_names(max_query_names))
-            }
-            None => Arc::new(metrics_backend),
-        };
+        let metrics_backend: Arc<dyn MetricsRecorder> = Arc::new(metrics_backend);
         metrics_backend.client_new_counter().increment(1);
 
         let retry_settings = self
@@ -452,17 +446,6 @@ impl ClientBuilder {
         self
     }
 
-    /// Cap the number of unique `query_name` values recorded through
-    /// [`crate::client_query::builders::CallBuilder::with_name`] (default 512).
-    ///
-    /// Valid names beyond the cap are recorded under `query_name="__other__"`;
-    /// names outside `[a-z0-9_]{1,64}` under `query_name="__invalid__"`. The cap
-    /// bounds the cardinality of the `ydb_query_named_*` series per recorder.
-    pub fn with_metrics_max_query_names(mut self, max_query_names: usize) -> Self {
-        self.metrics_max_query_names = Some(max_query_names);
-        self
-    }
-
     /// Add one static label attached to all SDK metrics.
     /// Labels accumulate across calls and are emitted in insertion order after
     /// the SDK-owned `driver_name` label. Values are fixed per client at
@@ -512,7 +495,6 @@ impl ClientBuilder {
             metrics_labels: Vec::new(),
             metrics_detail: MetricsDetail::Basic,
             metrics_max_endpoints: None,
-            metrics_max_query_names: None,
         }
     }
 }

@@ -1,19 +1,11 @@
 //! Canonicalization of caller-supplied query names into `query_name` label values.
 //!
-//! A query name is a `&'static str` constant from application code. Before it
-//! becomes a label value it passes through [`QueryNameRegistry::resolve`]:
-//!
-//! - names outside `[a-z0-9_]{1,64}` are recorded under `__invalid__`
-//!   (the API boundary — `CallBuilder::with_name` — additionally carries a
-//!   `debug_assert!` so the violation is caught early in debug builds);
-//! - valid names are admitted into the registry while the configured unique-name
-//!   limit is not reached; once it is, new names collapse into `__other__`,
-//!   bounding the series cardinality of the named metric rows.
-//!
-//! Resolution is memoized per interned name id, so the hot path is a read lock
-//! and a lookup, like the rest of the dynamic-series machinery.
+//! Names outside `[a-z0-9_]{1,64}` are recorded under `__invalid__`; every
+//! valid name keeps its own series. Resolution is memoized per interned name
+//! id, so the hot path is a read lock and a lookup, like the rest of the
+//! dynamic-series machinery.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::RwLock;
 
 use crate::client_metrics::interning::{intern, resolve};
@@ -21,11 +13,8 @@ use crate::client_metrics::interning::{intern, resolve};
 /// Fallback `query_name` label value for names outside `[a-z0-9_]{1,64}`.
 pub(crate) const INVALID_QUERY_NAME: &str = "__invalid__";
 
-/// Fallback `query_name` label value for valid names beyond the unique-name limit.
-pub(crate) const OVERFLOW_QUERY_NAME: &str = "__other__";
-
 /// Whether `name` is a valid `query_name` label value: `[a-z0-9_]{1,64}`.
-pub(crate) fn is_valid_query_name(name: &str) -> bool {
+fn is_valid_query_name(name: &str) -> bool {
     let len = name.len();
     (1..=64).contains(&len)
         && name
@@ -33,41 +22,24 @@ pub(crate) fn is_valid_query_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
 }
 
-/// Registry of admitted query names, owned by one recorder (stored inside
+/// Canonical query-name ids owned by one recorder (stored inside
 /// [`MetricsNames`](super::names::MetricsNames) alongside its dynamic caches).
 ///
-/// `accepted` holds the interned ids of admitted names (bounded by `max_names`);
 /// `resolved` memoizes the canonical (possibly fallback) interned id for every
 /// seen name, so repeated emissions of one query skip validation entirely.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct QueryNameRegistry {
-    max_names: usize,
-    accepted: RwLock<HashSet<usize>>,
     resolved: RwLock<HashMap<usize, usize>>,
 }
 
-impl Default for QueryNameRegistry {
-    fn default() -> Self {
-        Self::new(super::names::DEFAULT_MAX_QUERY_NAMES)
-    }
-}
-
 impl QueryNameRegistry {
-    pub(crate) fn new(max_names: usize) -> Self {
-        Self {
-            max_names,
-            accepted: RwLock::new(HashSet::new()),
-            resolved: RwLock::new(HashMap::new()),
-        }
-    }
-
-    /// Canonical interned id for `name`: the name itself when valid and admitted,
-    /// `__invalid__` for malformed names, `__other__` beyond the unique-name limit.
+    /// Canonical interned id for `name`: the name itself when valid or
+    /// `__invalid__` for a malformed name.
     ///
     /// The result feeds both the series cache keys and the `query_name` label
     /// value ([`resolve`]), so one resolution drives every named series of the
-    /// operation.
-    pub(crate) fn resolve(&self, name: &'static str) -> usize {
+    /// operation. An invalid name produces one warning per recorder.
+    pub(crate) fn resolve(&self, name: &str) -> usize {
         let id = intern(name);
         if let Some(hit) = self
             .resolved
@@ -78,25 +50,26 @@ impl QueryNameRegistry {
             return *hit;
         }
 
-        let canonical = if !is_valid_query_name(name) {
-            intern(INVALID_QUERY_NAME)
+        let valid = is_valid_query_name(name);
+        let canonical = if valid {
+            id
         } else {
-            let mut accepted = self
-                .accepted
-                .write()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if accepted.contains(&id) || accepted.len() < self.max_names {
-                accepted.insert(id);
-                id
-            } else {
-                intern(OVERFLOW_QUERY_NAME)
-            }
+            intern(INVALID_QUERY_NAME)
         };
-
-        self.resolved
+        let mut resolved = self
+            .resolved
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(id, canonical);
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(hit) = resolved.get(&id) {
+            return *hit;
+        }
+        if !valid {
+            tracing::warn!(
+                query_name = %name,
+                "invalid query name: expected [a-z0-9_]{{1,64}}; using `{INVALID_QUERY_NAME}`"
+            );
+        }
+        resolved.insert(id, canonical);
         canonical
     }
 
@@ -109,6 +82,8 @@ impl QueryNameRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn validation_accepts_spec_format() {
@@ -124,20 +99,34 @@ mod tests {
     }
 
     #[test]
-    fn valid_names_resolve_to_themselves() {
-        let registry = QueryNameRegistry::new(2);
+    fn static_and_owned_names_resolve_to_the_same_id() {
+        let registry = QueryNameRegistry::default();
         let canonical = registry.resolve("get_account_balance");
         assert_eq!(
             QueryNameRegistry::label_value(canonical),
             "get_account_balance"
         );
-        // Repeat: cached, same canonical id.
         assert_eq!(registry.resolve("get_account_balance"), canonical);
+        assert_eq!(
+            registry.resolve(&String::from("get_account_balance")),
+            canonical
+        );
+    }
+
+    #[test]
+    fn every_valid_name_resolves_to_itself() {
+        let registry = QueryNameRegistry::default();
+        for index in 0..600 {
+            let name = format!("query_{index}");
+            let canonical = registry.resolve(&name);
+            assert_eq!(QueryNameRegistry::label_value(canonical), name);
+            assert_eq!(registry.resolve(&name), canonical);
+        }
     }
 
     #[test]
     fn invalid_names_map_to_invalid_bucket() {
-        let registry = QueryNameRegistry::new(2);
+        let registry = QueryNameRegistry::default();
         let canonical = registry.resolve("Bad-Name");
         assert_eq!(
             QueryNameRegistry::label_value(canonical),
@@ -145,22 +134,47 @@ mod tests {
         );
     }
 
+    #[derive(Clone, Default)]
+    struct LogBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for LogBuffer {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBuffer {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
     #[test]
-    fn names_beyond_limit_collapse_to_other() {
-        let registry = QueryNameRegistry::new(2);
-        let first = registry.resolve("first_query");
-        let second = registry.resolve("second_query");
-        let third = registry.resolve("third_query");
-        // Repeated emissions keep their original canonical value.
-        assert_eq!(registry.resolve("first_query"), first);
-        assert_eq!(registry.resolve("second_query"), second);
-        // New names beyond the limit share the overflow bucket.
-        assert_eq!(QueryNameRegistry::label_value(third), OVERFLOW_QUERY_NAME);
-        assert_eq!(registry.resolve("fourth_query"), third);
-        // Fallback buckets do not consume the name budget.
-        assert_eq!(
-            registry.resolve("also-invalid!"),
-            registry.resolve("Bad-Name")
-        );
+    fn invalid_name_warns_once_per_name() {
+        let registry = QueryNameRegistry::default();
+        let logs = LogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(logs.clone())
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            registry.resolve("Bad-Name");
+            registry.resolve("Bad-Name");
+            registry.resolve("Other-Bad-Name");
+            registry.resolve("Other-Bad-Name");
+        });
+
+        let logs = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+        assert_eq!(logs.matches("invalid query name").count(), 2);
     }
 }

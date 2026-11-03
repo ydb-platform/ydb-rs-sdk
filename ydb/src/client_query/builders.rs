@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::future::IntoFuture;
 use std::marker::PhantomData;
@@ -5,9 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::TxMode;
-use crate::client_metrics::{
-    MetricsRecorder, QueryOperation, query_names::is_valid_query_name, ydb_status_code_label,
-};
+use crate::client_metrics::{MetricsRecorder, QueryOperation, ydb_status_code_label};
 use crate::errors::{YdbError, YdbResult};
 use crate::result::{ResultSet, Row};
 use crate::types::Value;
@@ -167,28 +166,25 @@ impl<'a, K, S> CallBuilder<'a, K, S> {
         self.with_tx_mode(TxMode::Implicit)
     }
 
-    /// Give the call a constant application-chosen name for the named query
-    /// metric rows: in addition to the common `ydb_query_*` series the operation
-    /// is recorded into `ydb_query_named_operations_total{query_name,result}`,
+    /// Give the call an application-chosen name for the named query metric
+    /// rows: in addition to the common `ydb_query_*` series the operation is
+    /// recorded into `ydb_query_named_operations_total{query_name,result}`,
     /// `ydb_query_named_operation_duration_seconds{query_name}`,
     /// `ydb_query_named_errors_total{query_name,status_code}` (on failure), and
     /// `ydb_query_named_result_rows` / `ydb_query_named_result_bytes{query_name}`
     /// (on success).
     ///
-    /// The name must be a `&'static str` constant from application code — never
-    /// runtime data (query text, parameters) — matching `[a-z0-9_]{1,64}`.
-    /// Malformed names are recorded under `query_name="__invalid__"` and trip a
-    /// `debug_assert!` here; the number of distinct names is capped per recorder
-    /// ([`crate::ClientBuilder::with_metrics_max_query_names`], default 512),
-    /// overflowing names collapse into `query_name="__other__"`. The name is also
-    /// recorded as the `ydb.query.name` span field, so traces correlate with the
-    /// metric rows. Calls without a name write only the common series.
-    pub fn with_name(mut self, query_name: &'static str) -> Self {
-        debug_assert!(
-            is_valid_query_name(query_name),
-            "query_name must match [a-z0-9_]{{1,64}}, got '{query_name}'"
-        );
-        self.opts.query_name = Some(query_name);
+    /// Use a constant or a small, bounded set of generated names (for example,
+    /// one per request handler), matching `[a-z0-9_]{1,64}`. Never use query
+    /// text, parameters, identifiers, or other unbounded runtime data. Static
+    /// strings are borrowed without allocation; owned strings are supported.
+    /// The default metrics adapter records malformed names under
+    /// `query_name="__invalid__"` and logs one warning per name without
+    /// interrupting the query. The name is also recorded as the
+    /// `ydb.query.name` span field, so traces correlate with the metric rows.
+    /// Calls without a name write only the common series.
+    pub fn with_name(mut self, query_name: impl Into<Cow<'static, str>>) -> Self {
+        self.opts.query_name = Some(query_name.into());
         self
     }
 }
@@ -232,13 +228,13 @@ impl<'a, S> IntoFuture for CallBuilder<'a, ExecCall, S> {
         Box::pin(async move {
             let recorder = target_recorder(&self.core);
             let start = Instant::now();
-            let query_name = self.opts.query_name;
+            let query_name = self.opts.query_name.clone();
             let result = materialize_query(&mut self.core, self.text, self.params, self.opts).await;
             let sizes = result.as_ref().ok().map(|query| (query.rows, query.bytes));
             record_query_operation(
                 &recorder,
                 QueryOperation::Exec,
-                query_name,
+                query_name.as_deref(),
                 start,
                 &result,
                 sizes,
@@ -256,7 +252,7 @@ impl<'a, T: FromYdbRow + 'a, S> IntoFuture for CallBuilder<'a, OneRow<T>, S> {
         Box::pin(async move {
             let recorder = target_recorder(&self.core);
             let start = Instant::now();
-            let query_name = self.opts.query_name;
+            let query_name = self.opts.query_name.clone();
             let mut sizes = None;
             let result = async {
                 let materialized =
@@ -272,7 +268,7 @@ impl<'a, T: FromYdbRow + 'a, S> IntoFuture for CallBuilder<'a, OneRow<T>, S> {
             record_query_operation(
                 &recorder,
                 QueryOperation::QueryRow,
-                query_name,
+                query_name.as_deref(),
                 start,
                 &result,
                 sizes,
@@ -290,7 +286,7 @@ impl<'a, T: FromYdbRow + 'a, S> IntoFuture for CallBuilder<'a, OptionalRow<T>, S
         Box::pin(async move {
             let recorder = target_recorder(&self.core);
             let start = Instant::now();
-            let query_name = self.opts.query_name;
+            let query_name = self.opts.query_name.clone();
             let mut sizes = None;
             let result = async {
                 let materialized =
@@ -306,7 +302,7 @@ impl<'a, T: FromYdbRow + 'a, S> IntoFuture for CallBuilder<'a, OptionalRow<T>, S
             record_query_operation(
                 &recorder,
                 QueryOperation::QueryRow,
-                query_name,
+                query_name.as_deref(),
                 start,
                 &result,
                 sizes,
@@ -324,7 +320,7 @@ impl<'a, S> IntoFuture for CallBuilder<'a, OneResultSet, S> {
         Box::pin(async move {
             let recorder = target_recorder(&self.core);
             let start = Instant::now();
-            let query_name = self.opts.query_name;
+            let query_name = self.opts.query_name.clone();
             let mut sizes = None;
             let result = materialize_query(&mut self.core, self.text, self.params, self.opts).await;
             let result = result.and_then(|materialized| {
@@ -334,7 +330,7 @@ impl<'a, S> IntoFuture for CallBuilder<'a, OneResultSet, S> {
             record_query_operation(
                 &recorder,
                 QueryOperation::QueryResultSet,
-                query_name,
+                query_name.as_deref(),
                 start,
                 &result,
                 sizes,
@@ -352,7 +348,7 @@ impl<'a, S> IntoFuture for CallBuilder<'a, Streamed, S> {
         Box::pin(async move {
             let recorder = target_recorder(&self.core);
             let start = Instant::now();
-            let query_name = self.opts.query_name;
+            let query_name = self.opts.query_name.clone();
             let commit_at_end = resolve_commit_tx(&self.core, &self.opts);
             match self.core {
                 ExecTarget::Client(context) => {
@@ -368,7 +364,7 @@ impl<'a, S> IntoFuture for CallBuilder<'a, Streamed, S> {
                             record_query_operation(
                                 &recorder,
                                 QueryOperation::Query,
-                                query_name,
+                                query_name.as_deref(),
                                 start,
                                 &result,
                                 None,
@@ -394,7 +390,7 @@ impl<'a, S> IntoFuture for CallBuilder<'a, Streamed, S> {
                             record_query_operation(
                                 &recorder,
                                 QueryOperation::Query,
-                                query_name,
+                                query_name.as_deref(),
                                 start,
                                 &result,
                                 None,
@@ -422,7 +418,7 @@ fn target_recorder(core: &ExecTarget<'_>) -> Arc<dyn MetricsRecorder> {
 pub(crate) fn record_query_operation<T>(
     recorder: &Arc<dyn MetricsRecorder>,
     operation: QueryOperation,
-    query_name: Option<&'static str>,
+    query_name: Option<&str>,
     start: Instant,
     result: &YdbResult<T>,
     sizes: Option<(u64, u64)>,

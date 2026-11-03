@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -35,7 +36,7 @@ fn raw_sets_size(raw_sets: &[RawResultSet]) -> (u64, u64) {
 /// starts the timer; its first terminal outcome consumes this guard exactly once.
 struct StreamTerminalMetrics {
     recorder: Arc<dyn MetricsRecorder>,
-    query_name: Option<&'static str>,
+    query_name: Option<Cow<'static, str>>,
     start: Instant,
     rows: u64,
     bytes: u64,
@@ -53,7 +54,7 @@ impl StreamTerminalMetrics {
         record_query_operation(
             &self.recorder,
             QueryOperation::Query,
-            self.query_name,
+            self.query_name.as_deref(),
             self.start,
             &result,
             result.as_ref().ok().map(|_| sizes),
@@ -62,7 +63,7 @@ impl StreamTerminalMetrics {
             // Preserve the existing partial-result accounting on errors and drops.
             self.recorder
                 .query_operation_result(QueryOperation::Query, self.rows, self.bytes);
-            if let Some(name) = self.query_name {
+            if let Some(name) = self.query_name.as_deref() {
                 self.recorder
                     .query_named_operation_result(name, self.rows, self.bytes);
             }
@@ -131,7 +132,7 @@ impl<'a> QueryStream<'a> {
     pub(crate) fn from_client(
         opened: OpenedClientQueryStream,
         recorder: Arc<dyn MetricsRecorder>,
-        query_name: Option<&'static str>,
+        query_name: Option<Cow<'static, str>>,
         start: Instant,
     ) -> Self {
         Self {
@@ -152,7 +153,7 @@ impl<'a> QueryStream<'a> {
         context: &'a mut TxExecContext,
         commit_at_end: bool,
         recorder: Arc<dyn MetricsRecorder>,
-        query_name: Option<&'static str>,
+        query_name: Option<Cow<'static, str>>,
         start: Instant,
     ) -> Self {
         Self {
