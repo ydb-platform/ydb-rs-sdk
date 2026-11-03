@@ -148,6 +148,13 @@ impl TransactionOptions {
     }
 }
 
+fn prepend_table_path_prefix(pragma: Option<&str>, text: String) -> String {
+    match pragma {
+        Some(pragma) => format!("{pragma}{text}"),
+        None => text,
+    }
+}
+
 pub struct QueryClient {
     ctx: ClientExecContext,
 }
@@ -175,8 +182,49 @@ impl QueryClient {
                 session_pool,
                 retry_settings,
                 metrics_names,
+                table_path_prefix_pragma: None,
             },
         }
+    }
+
+    /// Resolve relative SQL table paths under a full absolute YDB directory path.
+    ///
+    /// The prefix must start with `/` and contain no NUL characters. It is local to this
+    /// handle: clones copy it, another call replaces it, and `retry_tx` attempts inherit it.
+    /// It applies to all queries, explain calls and scripts, but not Table or Scheme RPCs.
+    /// No directory is created and the database path is not added automatically.
+    ///
+    /// This simply prepends `PRAGMA TablePathPrefix` to the original SQL. Leading syntax
+    /// directives such as `--!ansi_lexer` are therefore unsupported. Existing SQL and pragmas
+    /// are preserved; later explicit pragmas retain their server-defined behavior.
+    ///
+    /// ```no_run
+    /// # async fn example(client: ydb::Client) -> ydb::YdbResult<()> {
+    /// let mut queries = client.query_client()
+    ///     .with_table_path_prefix(format!("{}/application", client.database()))?;
+    /// queries.exec("CREATE TABLE items (id Int64, PRIMARY KEY (id))").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_table_path_prefix(mut self, prefix: impl Into<String>) -> YdbResult<Self> {
+        let prefix = prefix.into();
+        if !prefix.starts_with('/') || prefix.contains('\0') {
+            return Err(YdbError::Custom(format!(
+                "table path prefix must be an absolute path without NUL characters: {prefix:?}"
+            )));
+        }
+        let mut pragma = String::from("PRAGMA TablePathPrefix = \"");
+        for ch in prefix.chars() {
+            match ch {
+                '\\' => pragma.push_str("\\\\"),
+                '"' => pragma.push_str("\\\""),
+                ch if ch.is_ascii_control() => pragma.push_str(&format!("\\x{:02x}", ch as u8)),
+                ch => pragma.push(ch),
+            }
+        }
+        pragma.push_str("\";\n");
+        self.ctx.table_path_prefix_pragma = Some(pragma);
+        Ok(self)
     }
 
     /// Run a callback inside a retried interactive transaction.
@@ -343,13 +391,15 @@ impl QueryClient {
             Err(error) => return lease.finish(Err(error)),
         };
 
-        Ok(Transaction::new(
+        let mut tx = Transaction::new(
             query_client,
             lease,
             options,
             retry_deadline,
             self.ctx.metrics_names.clone(),
-        ))
+        );
+        tx.ctx.table_path_prefix_pragma = self.ctx.table_path_prefix_pragma.clone();
+        Ok(tx)
     }
 
     /// Analyze a query's execution plan without running it (`EXEC_MODE_EXPLAIN`).
@@ -597,6 +647,41 @@ mod unit_tests {
     use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
     use builders::{exactly_one_set, take_single_row};
+
+    #[test]
+    fn table_path_prefix_validation_and_clone_isolation() {
+        let client = || {
+            QueryClient::new(
+                test_connection_manager(),
+                SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1)),
+                RetrySettings::with_default_backoff(),
+                MetricsNames::new(None),
+            )
+        };
+        for prefix in ["", "relative/path", "/nul\0path"] {
+            assert!(matches!(
+                client().with_table_path_prefix(prefix),
+                Err(YdbError::Custom(_))
+            ));
+        }
+        let original = client();
+        let scoped = original
+            .clone()
+            .with_table_path_prefix("/local/first")
+            .unwrap();
+        let cloned = scoped.clone();
+        let replaced = scoped.with_table_path_prefix("/local/second").unwrap();
+        assert_eq!(original.ctx.table_path_prefix_pragma, None);
+        assert_eq!(
+            cloned.ctx.table_path_prefix_pragma.as_deref(),
+            Some("PRAGMA TablePathPrefix = \"/local/first\";\n")
+        );
+        assert_eq!(
+            replaced.ctx.table_path_prefix_pragma.as_deref(),
+            Some("PRAGMA TablePathPrefix = \"/local/second\";\n")
+        );
+        assert!(client().with_table_path_prefix("/").is_ok());
+    }
 
     struct AbortCounterHook(Arc<AtomicUsize>);
 

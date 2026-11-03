@@ -46,8 +46,8 @@ pub struct CallBuilder<'a, K, S = ClientOneShot> {
 impl<'a, K> CallBuilder<'a, K, ClientOneShot> {
     pub(crate) fn new_client(ctx: &'a mut ClientExecContext, text: String) -> Self {
         Self {
+            text: super::prepend_table_path_prefix(ctx.table_path_prefix_pragma.as_deref(), text),
             core: ExecTarget::Client(ctx),
-            text,
             params: HashMap::new(),
             opts: CallOptions::default(),
             _kind: PhantomData,
@@ -66,8 +66,8 @@ impl<'a, K> CallBuilder<'a, K, ClientOneShot> {
 impl<'a, K> CallBuilder<'a, K, Interactive> {
     pub(crate) fn new_tx(ctx: &'a mut TxExecContext, text: String) -> Self {
         Self {
+            text: super::prepend_table_path_prefix(ctx.table_path_prefix_pragma.as_deref(), text),
             core: ExecTarget::Tx(ctx),
-            text,
             params: HashMap::new(),
             opts: CallOptions::default(),
             _kind: PhantomData,
@@ -369,3 +369,65 @@ macro_rules! impl_tx_query_methods {
 
 pub(crate) use impl_client_query_methods;
 pub(crate) use impl_tx_query_methods;
+
+#[cfg(test)]
+mod table_path_prefix_tests {
+    use super::*;
+    use crate::client_metrics::names::MetricsNames;
+    use crate::grpc_connection_manager::GrpcConnectionManager;
+    use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
+    use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
+    use crate::retry_settings::RetrySettings;
+    use crate::session_pool::{SessionPool, SessionPoolSettings};
+    use crate::{GrpcOptions, QueryClient};
+    use http::Uri;
+
+    fn client() -> QueryClient {
+        QueryClient::new(
+            GrpcConnectionManager::new(
+                SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
+                    Uri::from_static("http://127.0.0.1:1"),
+                ))),
+                "test".into(),
+                MultiInterceptor::new(),
+                GrpcOptions::default(),
+            ),
+            SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1)),
+            RetrySettings::with_default_backoff(),
+            MetricsNames::new(None),
+        )
+    }
+
+    #[test]
+    fn table_path_prefix_all_query_builders_preserve_sql_and_params() {
+        let sql = "--!ansi_lexer\nDECLARE $id AS Int64;\nPRAGMA TablePathPrefix = '/explicit'; SELECT $id;";
+        let mut plain = client();
+        assert_eq!(plain.query_row(sql).text, sql);
+        let mut scoped = plain
+            .with_table_path_prefix("/local/a\\\"\n\r\t\u{1}кириллица")
+            .unwrap();
+        let expected = format!(
+            "PRAGMA TablePathPrefix = \"/local/a\\\\\\\"\\x0a\\x0d\\x09\\x01кириллица\";\n{sql}"
+        );
+        assert_eq!(scoped.exec(sql).text, expected);
+        assert_eq!(scoped.query(sql).text, expected);
+        assert_eq!(scoped.query_result_set(sql).text, expected);
+        assert_eq!(scoped.query_row(sql).text, expected);
+        assert_eq!(scoped.query_row(sql).optional().text, expected);
+        let typed = scoped.query_row(sql).typed::<Row>().param("$id", 42_i64);
+        assert_eq!(typed.text, expected);
+        assert_eq!(typed.params.get("$id"), Some(&Value::from(42_i64)));
+        let mut tx = TxExecContext {
+            tx_mode: TxMode::SerializableReadWrite,
+            begin: false,
+            state: super::super::exec::TxState::Committed,
+            retry_deadline: None,
+            metrics_names: MetricsNames::new(None),
+            table_path_prefix_pragma: scoped.ctx.table_path_prefix_pragma.clone(),
+        };
+        assert_eq!(
+            CallBuilder::<ExecCall, Interactive>::new_tx(&mut tx, sql.into()).text,
+            expected
+        );
+    }
+}
