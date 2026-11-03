@@ -58,7 +58,7 @@ impl RawQueryClient {
         }
     }
 
-    #[instrument(name = "ydb.grpc.ExecuteQuery", skip_all, fields(db.system.name = "ydb", ydb.session.id = %req.session_id), err)]
+    #[instrument(name = "ydb.grpc.ExecuteQuery.Open", skip_all, fields(db.system.name = "ydb", ydb.session.id = %req.session_id), err)]
     pub async fn execute_query(
         &mut self,
         req: RawExecuteQueryRequest,

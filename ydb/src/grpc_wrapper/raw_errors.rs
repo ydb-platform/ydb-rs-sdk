@@ -4,7 +4,7 @@ use std::time::SystemTimeError;
 
 pub(crate) type RawResult<T> = std::result::Result<T, RawError>;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum RawError {
     Custom(String),
     ProtobufDecodeError(String),

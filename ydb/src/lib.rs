@@ -95,11 +95,10 @@ mod types_converters;
 pub(crate) mod waiter;
 
 #[cfg(test)]
-mod types_test;
-
-mod client_metrics;
-#[cfg(test)]
 mod connection_pool_test;
+mod observability;
+#[cfg(test)]
+mod types_test;
 
 pub use async_closure::{
     __make_closure, AsyncFnMut, DynAsyncFnMut,
