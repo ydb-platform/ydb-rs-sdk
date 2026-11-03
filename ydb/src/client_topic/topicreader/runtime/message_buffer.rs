@@ -134,11 +134,16 @@ impl MessageBuffer {
         Ok(())
     }
 
-    pub(super) fn stop(&mut self, partition_session_id: PartitionSessionId) -> YdbResult<()> {
-        self.remove_partition(partition_session_id, "stop")?;
+    /// Removes a session and returns the stream credit carried by its discarded messages.
+    pub(super) fn stop(&mut self, partition_session_id: PartitionSessionId) -> YdbResult<i64> {
+        let entry = self.remove_partition(partition_session_id, "stop")?;
         self.priority_parent_sessions
             .retain(|&psid| psid != partition_session_id);
-        Ok(())
+        Ok(entry
+            .queue
+            .iter()
+            .map(|message| message.bytes_to_release)
+            .sum())
     }
 
     pub(super) fn is_active_session(&self, partition_session_id: PartitionSessionId) -> bool {
@@ -728,6 +733,48 @@ mod tests {
             batch.messages[0].get_commit_marker().partition_session_id,
             psid(2)
         );
+    }
+
+    #[test]
+    fn stop_returns_only_credit_still_buffered_in_that_session() {
+        for consumed in 0..=4 {
+            let mut buffer = MessageBuffer::default();
+            buffer.start(session(1, 10)).unwrap();
+            buffer.start(session(2, 20)).unwrap();
+            buffer
+                .push_raw_batch(raw_batch([(0, 0), (1, 17)]), psid(1), 0, 0)
+                .unwrap();
+            buffer
+                .push_raw_batch(raw_batch([(2, 0), (3, 23)]), psid(1), 0, 0)
+                .unwrap();
+            buffer
+                .push_raw_batch(raw_batch([(0, 31)]), psid(2), 0, 0)
+                .unwrap();
+            buffer.end(end(1, [20], [])).unwrap();
+
+            let popped_credit = if consumed > 0 {
+                buffer
+                    .pop_batch(consumed)
+                    .unwrap()
+                    .unwrap()
+                    .bytes_to_release
+            } else {
+                0
+            };
+            let discarded_credit = buffer.stop(psid(1)).unwrap();
+            assert_eq!(popped_credit + discarded_credit, 40);
+            assert!(!buffer.is_active_session(psid(1)));
+            assert!(buffer.stop(psid(1)).is_err());
+            let surviving = buffer.pop_batch(1).unwrap().unwrap();
+            assert_eq!(surviving.bytes_to_release, 31);
+            assert_eq!(
+                surviving.messages[0]
+                    .get_commit_marker()
+                    .partition_session_id,
+                psid(2)
+            );
+            assert!(buffer.pop_batch(1).unwrap().is_none());
+        }
     }
 
     #[test]
