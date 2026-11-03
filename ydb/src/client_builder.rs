@@ -1,5 +1,7 @@
 use crate::client_common::{DBCredentials, TokenCache};
-use crate::client_metrics::names::MetricsNames;
+use crate::client_metrics::{
+    DefaultMetricsRecorder, MetricsBackend, MetricsDetail, MetricsRecorder,
+};
 use crate::client_topic::compression::Executor;
 use crate::credentials::{
     AccessTokenCredentials, CredentialsRef, GCEMetadata, ServiceAccountCredentials,
@@ -12,12 +14,13 @@ use crate::grpc_connection_manager::{
     DiscoveryConnectionManager, GrpcConnectionManager, NoBalancer,
 };
 use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
+use crate::grpc_wrapper::metrics_interceptor::MetricsInterceptor;
 use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
 use crate::load_balancer::SharedLoadBalancer;
 use crate::{Client, Credentials, GrpcOptions, HasGrpcOptions, RetrySettings};
 use http::Uri;
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -237,6 +240,10 @@ pub struct ClientBuilder {
     executor: Option<Arc<dyn Executor>>,
     retry_settings: Option<RetrySettings>,
     driver_name: Option<String>,
+    metrics_backend: Option<Arc<dyn MetricsBackend>>,
+    metrics_labels: Vec<(String, String)>,
+    metrics_detail: MetricsDetail,
+    metrics_max_endpoints: Option<usize>,
 }
 
 impl ClientBuilder {
@@ -272,10 +279,21 @@ impl ClientBuilder {
         Ok(client_builder)
     }
 
-    pub async fn build(self) -> YdbResult<Client> {
-        let metrics_names = MetricsNames::new(self.driver_name);
+    pub async fn build(mut self) -> YdbResult<Client> {
+        validate_metrics_labels(&self.metrics_labels)?;
 
-        metrics_names.client_new_counter.increment(1);
+        let metrics_backend = DefaultMetricsRecorder::from_parts(
+            self.driver_name.take(),
+            std::mem::take(&mut self.metrics_labels),
+            self.metrics_backend.take(),
+        )
+        .with_metrics_detail(self.metrics_detail);
+        let metrics_backend = match self.metrics_max_endpoints.take() {
+            Some(max_endpoints) => metrics_backend.with_max_endpoints(max_endpoints),
+            None => metrics_backend,
+        };
+        let metrics_backend: Arc<dyn MetricsRecorder> = Arc::new(metrics_backend);
+        metrics_backend.client_new_counter().increment(1);
 
         let retry_settings = self
             .retry_settings
@@ -286,14 +304,16 @@ impl ClientBuilder {
             database: self.database.clone(),
         };
 
-        let interceptor =
-            MultiInterceptor::new().with_interceptor(AuthGrpcInterceptor::new(db_cred.clone())?);
+        let interceptor = MultiInterceptor::new()
+            .with_interceptor(MetricsInterceptor::new(Arc::clone(&metrics_backend)))
+            .with_interceptor(AuthGrpcInterceptor::new(db_cred.clone())?);
 
         let discovery_connection_manager = DiscoveryConnectionManager::new(
             NoBalancer,
             db_cred.database.clone(),
             interceptor.clone(),
             self.grpc_opts.clone(),
+            Arc::clone(&metrics_backend),
         );
 
         let discovery: Box<dyn Discovery> = match self.discovery {
@@ -320,6 +340,7 @@ impl ClientBuilder {
             db_cred.database.clone(),
             interceptor,
             self.grpc_opts.clone(),
+            metrics_backend.clone(),
         );
 
         Client::init(
@@ -329,7 +350,7 @@ impl ClientBuilder {
             load_balancer,
             self.executor,
             retry_settings,
-            metrics_names,
+            metrics_backend,
         )
         .await
     }
@@ -390,6 +411,74 @@ impl ClientBuilder {
         self
     }
 
+    /// Register SDK metrics into a caller-provided [`MetricsBackend`].
+    ///
+    /// The backend receives all SDK metric handles with this builder's driver
+    /// name and static metrics labels. With no explicit backend, the `metrics`
+    /// feature selects the ambient `metrics` recorder; without that feature,
+    /// the default recorder is a no-op.
+    pub fn with_metrics_recorder<B>(mut self, backend: B) -> Self
+    where
+        B: MetricsBackend + 'static,
+    {
+        self.metrics_backend = Some(Arc::new(backend));
+        self
+    }
+
+    /// Set the level of detail for gRPC transport metrics.
+    ///
+    /// [`MetricsDetail::Basic`] is the default: series are aggregated across
+    /// endpoints without an `endpoint` label. [`MetricsDetail::Endpoints`]
+    /// splits the same series by endpoint; it does not emit both variants.
+    pub fn with_metrics_detail(mut self, detail: MetricsDetail) -> Self {
+        self.metrics_detail = detail;
+        self
+    }
+
+    /// Cap distinct `endpoint` label values per client (default 64).
+    ///
+    /// This setting applies only with [`MetricsDetail::Endpoints`]. New
+    /// endpoints beyond the cap share `endpoint="__other__"` and are not
+    /// retained in SDK caches or the string interner. The cap bounds SDK memory
+    /// and newly created series; a backend may retain series already created.
+    pub fn with_metrics_max_endpoints(mut self, max_endpoints: usize) -> Self {
+        self.metrics_max_endpoints = Some(max_endpoints);
+        self
+    }
+
+    /// Add one static label attached to all SDK metrics.
+    /// Labels accumulate across calls and are emitted in insertion order after
+    /// the SDK-owned `driver_name` label. Values are fixed per client at
+    /// `build()` time, so keep them static and low-cardinality (e.g. `env`,
+    /// `app`); high-cardinality values inflate the metrics backend.
+    ///
+    /// The `driver_name` key is reserved; use [`ClientBuilder::with_driver_name`]
+    /// instead. Duplicate keys and the reserved key make `build()` fail.
+    pub fn with_metrics_label<K: Into<String>, V: Into<String>>(
+        mut self,
+        key: K,
+        value: V,
+    ) -> Self {
+        self.metrics_labels.push((key.into(), value.into()));
+        self
+    }
+
+    /// Add a set of static labels attached to all SDK metrics, in iteration order.
+    ///
+    /// Same semantics as [`ClientBuilder::with_metrics_label`]; may be called
+    /// repeatedly and preserves call order. Duplicate keys and the reserved
+    /// `driver_name` key make `build()` fail.
+    pub fn with_metrics_labels<I, K, V>(mut self, labels: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        self.metrics_labels
+            .extend(labels.into_iter().map(|(k, v)| (k.into(), v.into())));
+        self
+    }
+
     fn new() -> Self {
         Self {
             credentials: credentials_ref(AccessTokenCredentials::from("")),
@@ -402,8 +491,33 @@ impl ClientBuilder {
             executor: None,
             retry_settings: None,
             driver_name: None,
+            metrics_backend: None,
+            metrics_labels: Vec::new(),
+            metrics_detail: MetricsDetail::Basic,
+            metrics_max_endpoints: None,
         }
     }
+}
+
+/// Check user-supplied static metric labels before any work is done in `build()`:
+/// the `driver_name` key is reserved for the SDK, and duplicate keys would produce
+/// ambiguous metric series.
+fn validate_metrics_labels(labels: &[(String, String)]) -> YdbResult<()> {
+    let mut seen: HashSet<&str> = HashSet::from(["driver_name"]);
+    for (key, _) in labels {
+        if key == "driver_name" {
+            return Err(YdbError::Custom(
+                "reserved metrics label key 'driver_name'; use ClientBuilder::with_driver_name instead"
+                    .to_string(),
+            ));
+        }
+        if !seen.insert(key.as_str()) {
+            return Err(YdbError::Custom(format!(
+                "duplicate metrics label key '{key}'"
+            )));
+        }
+    }
+    Ok(())
 }
 
 impl HasGrpcOptions for ClientBuilder {

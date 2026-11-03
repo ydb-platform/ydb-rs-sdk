@@ -1,9 +1,12 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::future::IntoFuture;
 use std::marker::PhantomData;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::TxMode;
+use crate::client_metrics::{MetricsRecorder, QueryOperation, ydb_status_code_label};
 use crate::errors::{YdbError, YdbResult};
 use crate::result::{ResultSet, Row};
 use crate::types::Value;
@@ -162,6 +165,28 @@ impl<'a, K, S> CallBuilder<'a, K, S> {
     pub fn implicit_tx(self) -> Self {
         self.with_tx_mode(TxMode::Implicit)
     }
+
+    /// Give the call an application-chosen name for the named query metric
+    /// rows: in addition to the common `ydb_query_*` series the operation is
+    /// recorded into `ydb_query_named_operations_total{query_name,result}`,
+    /// `ydb_query_named_operation_duration_seconds{query_name}`,
+    /// `ydb_query_named_errors_total{query_name,status_code}` (on failure), and
+    /// `ydb_query_named_result_rows` / `ydb_query_named_result_bytes{query_name}`
+    /// (on success).
+    ///
+    /// Use a constant or a small, bounded set of generated names (for example,
+    /// one per request handler), matching `[a-z0-9_]{1,64}`. Never use query
+    /// text, parameters, identifiers, or other unbounded runtime data. Static
+    /// strings are borrowed without allocation; owned strings are supported.
+    /// The default metrics adapter records malformed names under
+    /// `query_name="__invalid__"` and logs one warning per name without
+    /// interrupting the query. The name is also recorded as the
+    /// `ydb.query.name` span field, so traces correlate with the metric rows.
+    /// Calls without a name write only the common series.
+    pub fn with_name(mut self, query_name: impl Into<Cow<'static, str>>) -> Self {
+        self.opts.query_name = Some(query_name.into());
+        self
+    }
 }
 
 impl<'a, T, S> CallBuilder<'a, OneRow<T>, S> {
@@ -201,8 +226,20 @@ impl<'a, S> IntoFuture for CallBuilder<'a, ExecCall, S> {
 
     fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
-            materialize_query(&mut self.core, self.text, self.params, self.opts).await?;
-            Ok(())
+            let recorder = target_recorder(&self.core);
+            let start = Instant::now();
+            let query_name = self.opts.query_name.clone();
+            let result = materialize_query(&mut self.core, self.text, self.params, self.opts).await;
+            let sizes = result.as_ref().ok().map(|query| (query.rows, query.bytes));
+            record_query_operation(
+                &recorder,
+                QueryOperation::Exec,
+                query_name.as_deref(),
+                start,
+                &result,
+                sizes,
+            );
+            result.map(|_| ())
         })
     }
 }
@@ -213,23 +250,30 @@ impl<'a, T: FromYdbRow + 'a, S> IntoFuture for CallBuilder<'a, OneRow<T>, S> {
 
     fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
+            let recorder = target_recorder(&self.core);
             let start = Instant::now();
-            let set = exactly_one_set(
-                materialize_query(&mut self.core, self.text, self.params, self.opts).await?,
-            )?;
-            let row = take_single_row(set)?.ok_or(YdbError::NoRows)?;
-            let delta = start.elapsed();
-            match &self.core {
-                ExecTarget::Client(core) => core
-                    .metrics_names
-                    .client_row_query_time_histogram
-                    .record(delta.as_secs_f64()),
-                ExecTarget::Tx(core) => core
-                    .metrics_names
-                    .client_transaction_row_query_time_histogram
-                    .record(delta.as_secs_f64()),
+            let query_name = self.opts.query_name.clone();
+            let mut sizes = None;
+            let result = async {
+                let materialized =
+                    materialize_query(&mut self.core, self.text, self.params, self.opts).await?;
+                sizes = Some((materialized.rows, materialized.bytes));
+                let set = exactly_one_set(materialized.sets)?;
+                let row = take_single_row(set)?.ok_or(YdbError::NoRows)?;
+                let delta = start.elapsed();
+                record_row_query_time(&self.core, delta);
+                T::from_row(row)
             }
-            T::from_row(row)
+            .await;
+            record_query_operation(
+                &recorder,
+                QueryOperation::QueryRow,
+                query_name.as_deref(),
+                start,
+                &result,
+                sizes,
+            );
+            result
         })
     }
 }
@@ -240,23 +284,30 @@ impl<'a, T: FromYdbRow + 'a, S> IntoFuture for CallBuilder<'a, OptionalRow<T>, S
 
     fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
+            let recorder = target_recorder(&self.core);
             let start = Instant::now();
-            let set = exactly_one_set(
-                materialize_query(&mut self.core, self.text, self.params, self.opts).await?,
-            )?;
-            let row = take_single_row(set)?.map(T::from_row).transpose();
-            let delta = start.elapsed();
-            match &self.core {
-                ExecTarget::Client(core) => core
-                    .metrics_names
-                    .client_row_query_time_histogram
-                    .record(delta.as_secs_f64()),
-                ExecTarget::Tx(core) => core
-                    .metrics_names
-                    .client_transaction_row_query_time_histogram
-                    .record(delta.as_secs_f64()),
+            let query_name = self.opts.query_name.clone();
+            let mut sizes = None;
+            let result = async {
+                let materialized =
+                    materialize_query(&mut self.core, self.text, self.params, self.opts).await?;
+                sizes = Some((materialized.rows, materialized.bytes));
+                let set = exactly_one_set(materialized.sets)?;
+                let row = take_single_row(set)?.map(T::from_row).transpose();
+                let delta = start.elapsed();
+                record_row_query_time(&self.core, delta);
+                row
             }
-            row
+            .await;
+            record_query_operation(
+                &recorder,
+                QueryOperation::QueryRow,
+                query_name.as_deref(),
+                start,
+                &result,
+                sizes,
+            );
+            result
         })
     }
 }
@@ -267,9 +318,24 @@ impl<'a, S> IntoFuture for CallBuilder<'a, OneResultSet, S> {
 
     fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
-            exactly_one_set(
-                materialize_query(&mut self.core, self.text, self.params, self.opts).await?,
-            )
+            let recorder = target_recorder(&self.core);
+            let start = Instant::now();
+            let query_name = self.opts.query_name.clone();
+            let mut sizes = None;
+            let result = materialize_query(&mut self.core, self.text, self.params, self.opts).await;
+            let result = result.and_then(|materialized| {
+                sizes = Some((materialized.rows, materialized.bytes));
+                exactly_one_set(materialized.sets)
+            });
+            record_query_operation(
+                &recorder,
+                QueryOperation::QueryResultSet,
+                query_name.as_deref(),
+                start,
+                &result,
+                sizes,
+            );
+            result
         })
     }
 }
@@ -280,21 +346,122 @@ impl<'a, S> IntoFuture for CallBuilder<'a, Streamed, S> {
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
+            let recorder = target_recorder(&self.core);
+            let start = Instant::now();
+            let query_name = self.opts.query_name.clone();
             let commit_at_end = resolve_commit_tx(&self.core, &self.opts);
             match self.core {
                 ExecTarget::Client(context) => {
                     let opened =
                         client_begin_stream(context, self.text, self.params, self.opts, false)
-                            .await?;
-                    Ok(QueryStream::from_client(opened))
+                            .await;
+                    match opened {
+                        Ok(opened) => Ok(QueryStream::from_client(
+                            opened, recorder, query_name, start,
+                        )),
+                        Err(error) => {
+                            let result: YdbResult<QueryStream<'a>> = Err(error);
+                            record_query_operation(
+                                &recorder,
+                                QueryOperation::Query,
+                                query_name.as_deref(),
+                                start,
+                                &result,
+                                None,
+                            );
+                            result
+                        }
+                    }
                 }
                 ExecTarget::Tx(context) => {
                     let stream =
-                        tx_begin_stream(context, self.text, self.params, self.opts, false).await?;
-                    Ok(QueryStream::from_tx(stream, context, commit_at_end))
+                        tx_begin_stream(context, self.text, self.params, self.opts, false).await;
+                    match stream {
+                        Ok(stream) => Ok(QueryStream::from_tx(
+                            stream,
+                            context,
+                            commit_at_end,
+                            recorder,
+                            query_name,
+                            start,
+                        )),
+                        Err(error) => {
+                            let result: YdbResult<QueryStream<'a>> = Err(error);
+                            record_query_operation(
+                                &recorder,
+                                QueryOperation::Query,
+                                query_name.as_deref(),
+                                start,
+                                &result,
+                                None,
+                            );
+                            result
+                        }
+                    }
                 }
             }
         })
+    }
+}
+
+fn target_recorder(core: &ExecTarget<'_>) -> Arc<dyn MetricsRecorder> {
+    match core {
+        ExecTarget::Client(ctx) => Arc::clone(&ctx.metrics_recorder),
+        ExecTarget::Tx(ctx) => Arc::clone(&ctx.metrics_recorder),
+    }
+}
+
+/// Record one query service operation from the outcome the caller observes:
+/// the `{operation,result}` counter and the duration histogram on any outcome,
+/// the error status on failure, and the result sizes on success. With a query
+/// name set, the same outcome is mirrored into the named series.
+pub(crate) fn record_query_operation<T>(
+    recorder: &Arc<dyn MetricsRecorder>,
+    operation: QueryOperation,
+    query_name: Option<&str>,
+    start: Instant,
+    result: &YdbResult<T>,
+    sizes: Option<(u64, u64)>,
+) {
+    match result {
+        Ok(_) => {
+            recorder.query_operation(operation, true, start.elapsed());
+            if let Some((rows, bytes)) = sizes {
+                recorder.query_operation_result(operation, rows, bytes);
+            }
+        }
+        Err(error) => {
+            recorder.query_operation(operation, false, start.elapsed());
+            recorder.query_operation_error(operation, ydb_status_code_label(error));
+        }
+    }
+    if let Some(name) = query_name {
+        match result {
+            Ok(_) => {
+                recorder.query_named_operation(name, true, start.elapsed());
+                if let Some((rows, bytes)) = sizes {
+                    recorder.query_named_operation_result(name, rows, bytes);
+                }
+            }
+            Err(error) => {
+                recorder.query_named_operation(name, false, start.elapsed());
+                recorder.query_named_operation_error(name, ydb_status_code_label(error));
+            }
+        }
+    }
+}
+
+/// Record the existing row-query-time histogram (client or transaction variant).
+fn record_row_query_time(core: &ExecTarget<'_>, delta: Duration) {
+    match core {
+        ExecTarget::Client(core) => core
+            .metrics_recorder
+            .client_row_query_time_histogram()
+            .record(delta.as_secs_f64()),
+        ExecTarget::Tx(core) => core
+            .metrics_recorder
+            .client_transaction_row_query_time_histogram()
+            .record(delta.as_secs_f64()),
     }
 }
 

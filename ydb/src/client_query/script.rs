@@ -1,8 +1,11 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::future::IntoFuture;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::client::TimeoutSettings;
+use crate::client_metrics::QueryOperation;
 use crate::closure;
 use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
@@ -41,6 +44,21 @@ pub struct ExecuteScriptBuilder<'a> {
     results_ttl: Option<Duration>,
 }
 
+/// Shared `with_name` implementation for the script builders: same contract as
+/// [`crate::client_query::builders::CallBuilder::with_name`].
+macro_rules! with_name_for_script_builder {
+    () => {
+        /// Give the operation an application-chosen name for the named query
+        /// metric rows (`ydb_query_named_*`); see
+        /// [`crate::client_query::builders::CallBuilder::with_name`] for the
+        /// naming and validation rules.
+        pub fn with_name(mut self, query_name: impl Into<Cow<'static, str>>) -> Self {
+            self.opts.query_name = Some(query_name.into());
+            self
+        }
+    };
+}
+
 impl<'a> ExecuteScriptBuilder<'a> {
     pub(crate) fn new(ctx: &'a ClientExecContext, text: String) -> Self {
         Self {
@@ -51,6 +69,8 @@ impl<'a> ExecuteScriptBuilder<'a> {
             results_ttl: None,
         }
     }
+
+    with_name_for_script_builder!();
 
     /// TTL for script results on the server after execution completes.
     pub fn results_ttl(mut self, ttl: Duration) -> Self {
@@ -80,10 +100,28 @@ impl<'a> IntoFuture for ExecuteScriptBuilder<'a> {
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            let results_ttl = self.results_ttl.ok_or_else(|| {
-                YdbError::Custom("execute_script requires `.results_ttl(...)`".into())
-            })?;
-            client_execute_script(self.ctx, self.text, self.params, self.opts, results_ttl).await
+            let recorder = Arc::clone(&self.ctx.metrics_recorder);
+            let start = Instant::now();
+            let query_name = self.opts.query_name.clone();
+            let result = async {
+                let results_ttl = self.results_ttl.ok_or_else(|| {
+                    YdbError::Custom("execute_script requires `.results_ttl(...)`".into())
+                })?;
+                client_execute_script(self.ctx, self.text, self.params, self.opts, results_ttl)
+                    .await
+            }
+            .await;
+            // ExecuteScript returns an operation handle, not rows: result sizes
+            // do not apply.
+            super::builders::record_query_operation(
+                &recorder,
+                QueryOperation::ExecuteScript,
+                query_name.as_deref(),
+                start,
+                &result,
+                None,
+            );
+            result
         })
     }
 }
@@ -108,6 +146,8 @@ impl<'a> FetchScriptResultsBuilder<'a> {
             opts: CallOptions::default(),
         }
     }
+
+    with_name_for_script_builder!();
 
     pub fn result_set_index(mut self, index: i64) -> Self {
         self.result_set_index = index;
@@ -136,7 +176,11 @@ impl<'a> IntoFuture for FetchScriptResultsBuilder<'a> {
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            client_fetch_script_results(
+            let recorder = Arc::clone(&self.ctx.metrics_recorder);
+            let start = Instant::now();
+            let query_name = self.opts.query_name.clone();
+            let mut sizes = None;
+            let result = client_fetch_script_results(
                 self.ctx,
                 self.operation_id,
                 self.result_set_index,
@@ -145,6 +189,19 @@ impl<'a> IntoFuture for FetchScriptResultsBuilder<'a> {
                 self.opts,
             )
             .await
+            .map(|(fetched, rows, bytes)| {
+                sizes = Some((rows, bytes));
+                fetched
+            });
+            super::builders::record_query_operation(
+                &recorder,
+                QueryOperation::FetchScriptResults,
+                query_name.as_deref(),
+                start,
+                &result,
+                sizes,
+            );
+            result
         })
     }
 }
@@ -210,7 +267,7 @@ async fn client_fetch_script_results(
     fetch_token: String,
     rows_limit: i64,
     opts: CallOptions,
-) -> YdbResult<FetchScriptResult> {
+) -> YdbResult<(FetchScriptResult, u64, u64)> {
     // FetchScriptResults is always safe to retry (aligned with Go SDK).
     ctx.retry_settings
         .clone()
@@ -240,7 +297,7 @@ async fn client_fetch_script_results_once(
     fetch_token: &str,
     rows_limit: i64,
     _opts: &CallOptions,
-) -> YdbResult<FetchScriptResult> {
+) -> YdbResult<(FetchScriptResult, u64, u64)> {
     let req = RawFetchScriptResultsRequest {
         operation_id: operation_id.to_string(),
         result_set_index,
@@ -256,9 +313,16 @@ async fn client_fetch_script_results_once(
         .await
         .map_err(YdbError::from)?;
 
-    Ok(FetchScriptResult {
-        result_set_index: index,
-        result_set: raw_set.try_into()?,
-        next_fetch_token: next_token,
-    })
+    // Result sizes are measured on the raw set: conversion consumes it.
+    let rows = raw_set.rows_count();
+    let bytes = raw_set.result_size_bytes();
+    Ok((
+        FetchScriptResult {
+            result_set_index: index,
+            result_set: raw_set.try_into()?,
+            next_fetch_token: next_token,
+        },
+        rows,
+        bytes,
+    ))
 }

@@ -5,7 +5,7 @@
 //! dropping any owning state submits DeleteSession cleanup.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -13,6 +13,7 @@ use http::Uri;
 use tokio::task::JoinHandle;
 use tracing::warn;
 
+use crate::client_metrics::SessionPoolAttachStreamCloseReason;
 use crate::errors::{YdbError, YdbResult, YdbStatusError};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
@@ -29,9 +30,14 @@ pub(super) struct CreatedSession {
 }
 
 impl CreatedSession {
-    pub(super) fn new(session_id: String, node_uri: Uri, cleanup: SessionCleanup) -> Self {
+    pub(super) fn new(
+        session_id: String,
+        node_uri: Uri,
+        cleanup: SessionCleanup,
+        pool: std::sync::Weak<super::pool::SessionPoolInner>,
+    ) -> Self {
         Self {
-            resource: SessionResource::new(cleanup, session_id, node_uri),
+            resource: SessionResource::new(cleanup, session_id, node_uri, pool),
         }
     }
 
@@ -57,9 +63,7 @@ impl CreatedSession {
             }
         }
 
-        let health = Arc::new(SessionHealth {
-            healthy: AtomicBool::new(true),
-        });
+        let health = Arc::new(SessionHealth::new());
         let listener_identity = identity.clone();
         let listener_health = health.clone();
         let listener = tokio::spawn(listen_attach_stream(
@@ -68,9 +72,11 @@ impl CreatedSession {
             listener_health,
             observer,
         ));
+        let mut resource = self.resource;
+        resource.close_emission.arm(health.clone());
         Ok(AttachedSession {
             _attach_listener: AttachSessionListener::Task(listener),
-            resource: self.resource,
+            resource,
             health,
         })
     }
@@ -83,6 +89,31 @@ pub(super) struct AttachedSession {
     _attach_listener: AttachSessionListener,
     resource: SessionResource,
     health: Arc<SessionHealth>,
+}
+
+/// Why a session became unusable, distinguishing keep-alive (attach stream) failures
+/// from other breaks for the close-reason metric.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SessionCloseCause {
+    Healthy,
+    Broken,
+    KeepaliveFailed,
+}
+
+impl SessionCloseCause {
+    /// Storage discriminants for the atomic close-cause cell in [`SessionHealth`];
+    /// named so readers and writers never rely on raw numeric literals.
+    const STORED_HEALTHY: u8 = Self::Healthy as u8;
+    const STORED_BROKEN: u8 = Self::Broken as u8;
+    const STORED_KEEPALIVE_FAILED: u8 = Self::KeepaliveFailed as u8;
+
+    fn from_stored(value: u8) -> Self {
+        match value {
+            Self::STORED_BROKEN => Self::Broken,
+            Self::STORED_KEEPALIVE_FAILED => Self::KeepaliveFailed,
+            _ => Self::Healthy,
+        }
+    }
 }
 
 impl AttachedSession {
@@ -98,9 +129,18 @@ impl AttachedSession {
         self.health.is_healthy()
     }
 
+    pub(super) fn close_cause(&self) -> SessionCloseCause {
+        self.health.close_cause()
+    }
+
     #[cfg(test)]
     pub(super) fn invalidate(&self) {
         self.health.mark_broken();
+    }
+
+    #[cfg(test)]
+    pub(super) fn invalidate_keepalive(&self) {
+        self.health.mark_keepalive_failed();
     }
 
     pub(super) fn ensure_healthy(&self) -> YdbResult<()> {
@@ -123,15 +163,22 @@ impl AttachedSession {
         session_id: String,
         node_uri: Uri,
         cleanup: SessionCleanup,
+        pool: std::sync::Weak<super::pool::SessionPoolInner>,
     ) -> Self {
-        let resource = SessionResource::new(cleanup, session_id, node_uri);
+        let mut resource = SessionResource::new(cleanup, session_id, node_uri, pool);
+        let health = Arc::new(SessionHealth::new());
+        resource.close_emission.arm(health.clone());
         Self {
             _attach_listener: AttachSessionListener::Stub,
-            health: Arc::new(SessionHealth {
-                healthy: AtomicBool::new(true),
-            }),
+            health,
             resource,
         }
+    }
+
+    /// Disarm the abnormal-close emission before an explicit pool close emits its
+    /// own, more specific close reason.
+    pub(super) fn disarm_close_emission(&mut self) {
+        self.resource.close_emission.disarm();
     }
 }
 
@@ -139,16 +186,59 @@ impl AttachedSession {
 struct SessionResource {
     cleanup: SessionCleanup,
     identity: Arc<SessionIdentity>,
+    /// Emits the close metric when the session record is dropped while the close
+    /// emission is still armed — the abnormal lease drop path. Explicit pool close
+    /// sites disarm it first and emit their own, more specific reason.
+    close_emission: SessionCloseEmission,
 }
 
 impl SessionResource {
-    fn new(cleanup: SessionCleanup, session_id: String, node_uri: Uri) -> Self {
+    fn new(
+        cleanup: SessionCleanup,
+        session_id: String,
+        node_uri: Uri,
+        pool: std::sync::Weak<super::pool::SessionPoolInner>,
+    ) -> Self {
         Self {
             cleanup,
             identity: Arc::new(SessionIdentity {
                 session_id,
                 node_uri,
             }),
+            close_emission: SessionCloseEmission::new(pool),
+        }
+    }
+}
+
+/// RAII guard counting an abnormal session close (lease dropped without returning
+/// the session to the pool). It stays disarmed until AttachSession succeeds and is
+/// disarmed again by every explicit close site.
+struct SessionCloseEmission {
+    pool: std::sync::Weak<super::pool::SessionPoolInner>,
+    health: Option<Arc<SessionHealth>>,
+}
+
+impl SessionCloseEmission {
+    fn new(pool: std::sync::Weak<super::pool::SessionPoolInner>) -> Self {
+        Self { pool, health: None }
+    }
+
+    fn arm(&mut self, health: Arc<SessionHealth>) {
+        self.health = Some(health);
+    }
+
+    fn disarm(&mut self) {
+        self.health = None;
+    }
+}
+
+impl Drop for SessionCloseEmission {
+    fn drop(&mut self) {
+        let Some(health) = &self.health else {
+            return;
+        };
+        if let Some(pool) = self.pool.upgrade() {
+            pool.record_abnormal_session_close(health.close_cause());
         }
     }
 }
@@ -170,15 +260,49 @@ struct SessionIdentity {
 /// No other data is published through this flag, so relaxed ordering is sufficient.
 struct SessionHealth {
     healthy: AtomicBool,
+    /// Close cause recorded with the first break; the attach stream listener records
+    /// keep-alive failures so the close metric can attribute them.
+    close_cause: AtomicU8,
 }
 
 impl SessionHealth {
+    fn new() -> Self {
+        Self {
+            healthy: AtomicBool::new(true),
+            close_cause: AtomicU8::new(SessionCloseCause::STORED_HEALTHY),
+        }
+    }
+
     fn is_healthy(&self) -> bool {
         self.healthy.load(Ordering::Relaxed)
     }
 
+    fn close_cause(&self) -> SessionCloseCause {
+        let cause = SessionCloseCause::from_stored(self.close_cause.load(Ordering::Relaxed));
+        match cause {
+            SessionCloseCause::Healthy if !self.is_healthy() => SessionCloseCause::Broken,
+            cause => cause,
+        }
+    }
+
     fn mark_broken(&self) {
         self.healthy.store(false, Ordering::Relaxed);
+        // First cause wins: a later generic break must not overwrite a recorded
+        // keep-alive failure, and a failed CAS only means a cause is already set.
+        let _ = self.close_cause.compare_exchange(
+            SessionCloseCause::STORED_HEALTHY,
+            SessionCloseCause::STORED_BROKEN,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
+    }
+
+    fn mark_keepalive_failed(&self) {
+        self.healthy.store(false, Ordering::Relaxed);
+        self.close_cause.store(
+            SessionCloseCause::STORED_KEEPALIVE_FAILED,
+            Ordering::Relaxed,
+        );
     }
 }
 
@@ -261,7 +385,7 @@ async fn listen_attach_stream(
             .map_err(YdbError::from)
             .and_then(|message| RawSessionState::try_from(message).map_err(YdbError::from))
     });
-    let node_shutdown = loop {
+    let reason = loop {
         match events.next().await {
             Some(Ok(RawSessionState::Active)) => {}
             Some(Ok(RawSessionState::SessionShutdown)) => {
@@ -270,7 +394,7 @@ async fn listen_attach_stream(
                     hint = ?RawSessionState::SessionShutdown,
                     "query session attach listener received a shutdown hint"
                 );
-                break false;
+                break SessionPoolAttachStreamCloseReason::SessionShutdown;
             }
             Some(Ok(RawSessionState::NodeShutdown)) => {
                 warn!(
@@ -278,7 +402,7 @@ async fn listen_attach_stream(
                     hint = ?RawSessionState::NodeShutdown,
                     "query session attach listener received a shutdown hint"
                 );
-                break true;
+                break SessionPoolAttachStreamCloseReason::NodeShutdown;
             }
             Some(Err(err)) => {
                 warn!(
@@ -286,20 +410,25 @@ async fn listen_attach_stream(
                     error = %err,
                     "query session attach listener failed"
                 );
-                break false;
+                break SessionPoolAttachStreamCloseReason::Error;
             }
             None => {
                 warn!(
                     session_id = %identity.session_id,
                     "query session attach stream closed"
                 );
-                break false;
+                break SessionPoolAttachStreamCloseReason::StreamClosed;
             }
         }
     };
 
+    observer.attach_stream_closed(reason);
+    if reason == SessionPoolAttachStreamCloseReason::Error {
+        // Preserve the transport failure for the later abnormal-close metric.
+        health.mark_keepalive_failed();
+    }
     health.mark_broken();
-    if node_shutdown {
+    if reason == SessionPoolAttachStreamCloseReason::NodeShutdown {
         observer.node_shutdown(&identity.node_uri);
     }
 }
@@ -308,6 +437,7 @@ async fn listen_attach_stream(
 mod tests {
     use super::*;
     use crate::GrpcOptions;
+    use crate::client_metrics::DefaultMetricsRecorder;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
 
@@ -319,6 +449,7 @@ mod tests {
             "bench".to_string(),
             MultiInterceptor::new(),
             GrpcOptions::default(),
+            Arc::new(DefaultMetricsRecorder::new()),
         )
     }
 
@@ -347,12 +478,11 @@ mod tests {
             cleanup,
             "attached".to_string(),
             Uri::from_static("http://127.0.0.1/bench"),
+            std::sync::Weak::new(),
         );
         let session = AttachedSession {
             _attach_listener: AttachSessionListener::Task(listener),
-            health: Arc::new(SessionHealth {
-                healthy: AtomicBool::new(true),
-            }),
+            health: Arc::new(SessionHealth::new()),
             resource,
         };
 
