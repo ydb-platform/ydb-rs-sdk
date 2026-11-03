@@ -84,3 +84,7 @@ tokio = { version = "1.22", features = ["test-util"] }
 tracing-opentelemetry = "0.33.0"
 tracing-test = "0.2.1"
 uuid = { version = "1.17.0", features = ["v4"] }
+
+[[example]]
+name = "ydb-tech-topic"
+path = "examples/ydb_tech/topic/main.rs"
