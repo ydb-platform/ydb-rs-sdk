@@ -45,7 +45,7 @@ pub(crate) async fn run(connection_string: String, cancel: CancellationToken) {
 }
 
 async fn burst(connection_string: &str) -> YdbResult<()> {
-    let client = build_client(connection_string)
+    let client = build_client(connection_string, "metrics-example-burst")
         .await?
         .with_session_pool(SessionPoolSettings {
             limit: 5,

@@ -2,8 +2,8 @@
 //!
 //! The SDK registers all metric handles at `Client::build()` time, so the global
 //! recorder must be installed **before** the first client is built, or every
-//! handle binds to the no-op recorder. `install()` panics if a global recorder
-//! is already installed — call it exactly once at startup, outside any
+//! handle binds to the no-op recorder. `install()` returns an error if a global
+//! recorder is already installed — call it exactly once at startup, outside any
 //! reconnect loop (the recorder is global and survives client rebuilds).
 
 use std::net::{Ipv4Addr, SocketAddr};

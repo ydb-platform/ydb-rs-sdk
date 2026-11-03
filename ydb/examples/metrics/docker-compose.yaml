@@ -13,7 +13,7 @@ include:
 
 services:
   victoriametrics:
-    image: victoriametrics/victoria-metrics:latest
+    image: victoriametrics/victoria-metrics:v1.155.0
     command: ["-promscrape.config=/etc/vm/scrape.yml", "-retentionPeriod=1d"]
     volumes:
       - ./victoria/scrape.yml:/etc/vm/scrape.yml:ro
@@ -25,7 +25,7 @@ services:
       - "host.docker.internal:host-gateway"
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.2.4
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer

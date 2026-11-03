@@ -3,12 +3,10 @@
 //! overridden by `METRICS_PORT`).
 //!
 //! The example covers client, gRPC, session pool, and query service metrics.
-//! See `README.md` for the series
-//! list, the scenario-to-metric map, and known gaps:
-//! - `ydb_grpc_stream_messages_total{direction="sent"}` is never emitted (all
-//!   stream senders use `clone_sender()`, bypassing the counting wrapper);
-//! - `ydb_grpc_connections{state="idle"}` is never emitted (channels are lazy,
-//!   so an idle live-socket state cannot be observed).
+//! See `README.md` for the series list, scenario-to-metric map, and known
+//! limitations. In particular, `ydb_grpc_connections{state="idle"}` is never
+//! emitted because channels are lazy and an idle live-socket state cannot be
+//! observed.
 
 mod exporter;
 mod scenarios;
@@ -28,9 +26,9 @@ pub(crate) type SharedClient = Arc<RwLock<Arc<Client>>>;
 /// Build a driver with static metric labels. The SDK binds its metric handles
 /// at `build()` time; the global recorder must already be installed (see
 /// `exporter::install` — called exactly once before the first `build()`).
-pub(crate) async fn build_client(connection_string: &str) -> YdbResult<Client> {
+pub(crate) async fn build_client(connection_string: &str, driver_name: &str) -> YdbResult<Client> {
     ClientBuilder::new_from_connection_string(connection_string)?
-        .with_driver_name("metrics-example")
+        .with_driver_name(driver_name)
         .with_metrics_label("app", "metrics-example")
         .with_metrics_detail(MetricsDetail::Endpoints)
         .build()
@@ -54,7 +52,7 @@ async fn main() -> YdbResult<()> {
         .unwrap_or_else(|_| "grpc://localhost:2136/local".to_string());
 
     let client: SharedClient = Arc::new(RwLock::new(Arc::new(
-        build_client(&connection_string).await?,
+        build_client(&connection_string, "metrics-example").await?,
     )));
 
     let cancel = CancellationToken::new();

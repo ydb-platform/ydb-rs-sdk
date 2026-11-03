@@ -1,14 +1,11 @@
 //! Topic scenario: create a topic, produce messages, consume them with
 //! auto-commit, clean up.
 //!
-//! This is the only scenario that moves the gRPC stream series in both roles
-//! that exist today:
+//! This scenario moves the gRPC stream series in both directions:
 //! - `ydb_grpc_stream_messages_total{direction="received"}` — every
 //!   `StreamRead` part the reader receives (and the writer's init response);
-//! - the writer's sent messages would be
-//!   `ydb_grpc_stream_messages_total{direction="sent"}` but are **never
-//!   emitted** — a known SDK gap: all stream senders use `clone_sender()`,
-//!   bypassing the counting wrapper.
+//! - `ydb_grpc_stream_messages_total{direction="sent"}` — writer messages,
+//!   including requests sent through cloned stream senders.
 //!
 //! Also moves: `ydb_new_topic_client_counter`, `ydb_new_scheme_client_counter`
 //! (the topic lives in a created directory), scheme/topic gRPC RPCs in
@@ -75,7 +72,7 @@ async fn tick(client: &ydb::Client) -> YdbResult<()> {
         .create_topic(topic_path.clone(), options)
         .await?;
 
-    // Produce. Sent stream messages are not counted (known gap, see module docs).
+    // Produce. Sent stream messages are counted, including writes by cloned senders.
     let writer = topic_client
         .create_writer_with_params(
             TopicWriterOptions::builder()

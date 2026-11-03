@@ -38,7 +38,7 @@ pub(crate) async fn run(
             return;
         }
 
-        match build_client(&connection_string).await {
+        match build_client(&connection_string, "metrics-example").await {
             Ok(new_client) => {
                 let mut guard = client.write().await;
                 let old = std::mem::replace(&mut *guard, Arc::new(new_client));
