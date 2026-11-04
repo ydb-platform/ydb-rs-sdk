@@ -14,6 +14,7 @@ use crate::client_topic::topicwriter::writer_tx::TopicWriterTx;
 use crate::errors;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_topic_service::alter_topic::RawAlterTopicRequest;
+use crate::grpc_wrapper::raw_topic_service::commit_offset::RawCommitOffsetRequest;
 use crate::grpc_wrapper::raw_topic_service::create_topic::RawCreateTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::describe_consumer::RawDescribeConsumerRequest;
 use crate::grpc_wrapper::raw_topic_service::describe_topic::RawDescribeTopicRequest;
@@ -110,6 +111,25 @@ pub struct DescribeConsumerOptions {
     pub include_stats: bool,
     #[builder(default)]
     pub include_location: bool,
+}
+
+/// Options for [`TopicClient::commit_offset`].
+#[derive(Builder, Default)]
+#[builder(build_fn(error = "errors::YdbError"))]
+pub struct CommitOffsetOptions {
+    // Use CommitOffsetOptionsBuilder
+    /// Identifier of an active read session, as assigned by the server in the
+    /// `StreamRead` init response.
+    ///
+    /// Without it the server interrupts whatever read session currently holds
+    /// the partition, forcing that reader to reconnect. Setting it to the id of
+    /// your own session commits without disturbing it.
+    ///
+    /// Note: [`TopicReader`](crate::TopicReader) does not expose its session id
+    /// yet, so this is only usable when the id is known from elsewhere. Leave it
+    /// unset when committing from outside a read session.
+    #[builder(setter(strip_option, into), default)]
+    pub read_session_id: Option<String>,
 }
 
 impl From<UninitializedFieldError> for errors::YdbError {
@@ -209,6 +229,44 @@ impl TopicClient {
 
         let mut service = self.raw_client_connection().await?;
         service.delete_topic(req).await?;
+
+        Ok(())
+    }
+
+    /// Commit a processed offset for a consumer on a partition, without an
+    /// active read session.
+    ///
+    /// The offset is the position to resume from, i.e. one past the last
+    /// message the consumer processed.
+    ///
+    /// Server behaviour for out-of-range offsets:
+    /// - beyond the end of the partition, or negative: `BAD_REQUEST`;
+    /// - below the committed position: accepted, rewinding the consumer;
+    /// - equal to the committed position: accepted, no change.
+    ///
+    /// By default the server interrupts any read session currently holding the
+    /// partition, forcing it to reconnect. See
+    /// [`CommitOffsetOptions::read_session_id`] to avoid that.
+    #[instrument(name = "ydb.TopicClient.CommitOffset", skip_all, fields(db.system.name = "ydb", ydb.topic.path = %path, ydb.consumer.name = %consumer))]
+    pub async fn commit_offset(
+        &mut self,
+        path: String,
+        partition_id: i64,
+        consumer: String,
+        offset: i64,
+        options: CommitOffsetOptions,
+    ) -> YdbResult<()> {
+        let req = RawCommitOffsetRequest {
+            operation_params: self.timeouts.operation_params(),
+            path,
+            partition_id,
+            consumer,
+            offset,
+            read_session_id: options.read_session_id.unwrap_or_default(),
+        };
+
+        let mut service = self.raw_client_connection().await?;
+        service.commit_offset(req).await?;
 
         Ok(())
     }

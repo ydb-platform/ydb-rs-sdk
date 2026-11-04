@@ -1,5 +1,6 @@
 pub(crate) mod alter_topic;
 pub(crate) mod client;
+pub(crate) mod commit_offset;
 pub(crate) mod common;
 pub(crate) mod create_topic;
 pub(crate) mod describe_consumer;
