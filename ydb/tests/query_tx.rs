@@ -21,8 +21,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ydb::{
-    Client, ClientBuilder, Transaction, YdbError, YdbOrCustomerError, YdbResult, YdbStatusError,
-    closure,
+    Client, ClientBuilder, SessionPoolSettings, Transaction, YdbError, YdbOrCustomerError,
+    YdbResult, YdbStatusError, closure,
 };
 use ydb_grpc::ydb_proto::query::{
     CommitTransactionResponse, ExecuteQueryResponsePart, RollbackTransactionResponse,
@@ -43,6 +43,21 @@ async fn make_client(server: &MockServer) -> YdbResult<Client> {
     ))?
     .build()
     .await
+}
+
+/// A client whose session pool holds exactly one session.
+///
+/// Cleanup after a failed transaction runs in a detached task (`spawn_pool_release`) and returns
+/// the session only once the rollback RPC has answered, while `retry_tx` starts the next attempt
+/// straight away. With the default pool the next attempt simply creates a second session whenever
+/// it wins that race, so an assertion on session reuse depends on task scheduling. A pool of one
+/// removes the race: the next attempt has no permit to take and waits for the cleanup to hand the
+/// session back, which is the behaviour under test.
+async fn make_client_with_single_session(server: &MockServer) -> YdbResult<Client> {
+    make_client(server)
+        .await?
+        .with_session_pool(SessionPoolSettings::new().with_limit(1))
+        .await
 }
 
 fn success_part(tx_id: Option<&str>) -> ExecuteQueryResponsePart {
@@ -419,7 +434,7 @@ async fn definitive_commit_failure_retries_whole_transaction() -> YdbResult<()> 
     let (handler, tx_lifecycle) =
         ScriptedCommitHandler::new(vec![StatusCode::Aborted, StatusCode::Success]);
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server).await?;
+    let client = make_client_with_single_session(&server).await?;
 
     let result = client
         .query_client()
