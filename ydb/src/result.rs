@@ -7,6 +7,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::vec::IntoIter;
 
+/// One result set of a query - a column schema plus the rows that match it
+///
+/// A single query can return several result sets; see
+/// [`QueryStream`](crate::QueryStream) for reading them one by one, or
+/// [`QueryClient::query_result_set`](crate::QueryClient::query_result_set)
+/// when exactly one is expected.
 #[derive(Debug, Default)]
 pub struct ResultSet {
     columns: Vec<crate::types::Column>,
@@ -20,6 +26,7 @@ impl ResultSet {
         &self.columns
     }
 
+    /// Consume the result set and iterate over its rows
     pub fn rows(self) -> ResultSetRowsIter {
         ResultSetRowsIter {
             columns: Arc::new(self.columns),
@@ -28,6 +35,9 @@ impl ResultSet {
         }
     }
 
+    /// Whether the server cut the result set off at its row limit
+    ///
+    /// When `true`, more rows matched the query than were returned.
     #[allow(dead_code)]
     pub fn is_truncated(&self) -> bool {
         self.raw_result_set.truncated
@@ -65,6 +75,11 @@ impl IntoIterator for ResultSet {
     }
 }
 
+/// A single row of a [`ResultSet`]
+///
+/// Fields are taken out of the row by name or by index. Each field can be
+/// removed only once, which lets the row hand out owned [`Value`]s without
+/// cloning.
 #[derive(Debug)]
 pub struct Row {
     columns: Arc<Vec<crate::types::Column>>,
@@ -73,6 +88,10 @@ pub struct Row {
 }
 
 impl Row {
+    /// Take a field out of the row by column name
+    ///
+    /// Returns an error if there is no such column, or if the field was
+    /// already removed.
     pub fn remove_field_by_name(&mut self, name: &str) -> errors::YdbResult<Value> {
         if let Some(&index) = self.columns_by_name.get(name) {
             return self.remove_field(index);
@@ -80,6 +99,10 @@ impl Row {
         Err(YdbError::Custom("field not found".into()))
     }
 
+    /// Take a field out of the row by zero-based column index
+    ///
+    /// Returns an error if the index is out of range, or if the field was
+    /// already removed.
     pub fn remove_field(&mut self, index: usize) -> errors::YdbResult<Value> {
         match self.raw_values.remove(&index) {
             Some(val) => Ok(Value::try_from(RawTypedValue {
@@ -91,6 +114,7 @@ impl Row {
     }
 }
 
+/// Iterator over the rows of a [`ResultSet`], created by [`ResultSet::rows`]
 pub struct ResultSetRowsIter {
     columns: Arc<Vec<crate::types::Column>>,
     columns_by_name: Arc<HashMap<String, usize>>,
