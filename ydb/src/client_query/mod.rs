@@ -9,6 +9,7 @@ pub(crate) mod hooks;
 mod retry_tx;
 mod script;
 mod stream_facade;
+mod virtual_timestamp;
 
 #[cfg(test)]
 mod integration_test;
@@ -29,6 +30,7 @@ mod tx_modes_integration_test;
 mod concurrent_result_sets_test;
 
 use std::ops::ControlFlow;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use http::Uri;
@@ -48,8 +50,8 @@ use crate::retry_settings::{RetrySettings, RetryState};
 use crate::session_pool::SessionPool;
 use builders::{impl_client_query_methods, impl_tx_query_methods};
 use exec::{
-    ClientExecContext, TxExecContext, ensure_interactive_tx_mode, tx_commit, tx_ensure_begin,
-    tx_exec_context, tx_identity, tx_rollback,
+    ClientExecContext, TxExecContext, ensure_interactive_tx_mode, tx_commit,
+    tx_commit_with_timestamp, tx_ensure_begin, tx_exec_context, tx_identity, tx_rollback,
 };
 use hooks::QueryTxHook;
 
@@ -70,6 +72,7 @@ impl FromYdbRow for Row {
 /// |------|--------------------------|----------------------------------|
 /// | [`Implicit`](Self::Implicit) | yes (default) | no |
 /// | [`SerializableReadWrite`](Self::SerializableReadWrite) | yes | yes (default) |
+/// | [`StrictSerializableRW`](Self::StrictSerializableRW) | yes | yes |
 /// | [`SnapshotReadOnly`](Self::SnapshotReadOnly) | yes | yes |
 /// | [`SnapshotReadWrite`](Self::SnapshotReadWrite) | yes | yes |
 /// | [`StaleReadOnly`](Self::StaleReadOnly) | yes | no |
@@ -85,6 +88,8 @@ pub enum TxMode {
     #[default]
     Implicit,
     SerializableReadWrite,
+    /// Strict serializable read-write transactions can return a commit timestamp for writes.
+    StrictSerializableRW,
     SnapshotReadOnly,
     SnapshotReadWrite,
     StaleReadOnly,
@@ -98,7 +103,10 @@ impl TxMode {
     pub(crate) fn supported_in_interactive(self) -> bool {
         matches!(
             self,
-            Self::SerializableReadWrite | Self::SnapshotReadOnly | Self::SnapshotReadWrite
+            Self::SerializableReadWrite
+                | Self::StrictSerializableRW
+                | Self::SnapshotReadOnly
+                | Self::SnapshotReadWrite
         )
     }
 }
@@ -168,6 +176,7 @@ impl QueryClient {
         session_pool: SessionPool,
         retry_settings: RetrySettings,
         metrics_names: MetricsNames,
+        timestamp_scope: Arc<str>,
     ) -> Self {
         Self {
             ctx: ClientExecContext {
@@ -175,6 +184,7 @@ impl QueryClient {
                 session_pool,
                 retry_settings,
                 metrics_names,
+                timestamp_scope,
             },
         }
     }
@@ -349,6 +359,7 @@ impl QueryClient {
             options,
             retry_deadline,
             self.ctx.metrics_names.clone(),
+            self.ctx.timestamp_scope.clone(),
         ))
     }
 
@@ -476,9 +487,17 @@ impl Transaction {
         options: TransactionOptions,
         retry_deadline: Option<Instant>,
         metrics_names: MetricsNames,
+        timestamp_scope: Arc<str>,
     ) -> Self {
         Self {
-            ctx: tx_exec_context(query_client, lease, options, retry_deadline, metrics_names),
+            ctx: tx_exec_context(
+                query_client,
+                lease,
+                options,
+                retry_deadline,
+                metrics_names,
+                timestamp_scope,
+            ),
         }
     }
 
@@ -508,6 +527,14 @@ impl Transaction {
 
     pub async fn rollback(&mut self) -> YdbResult<()> {
         tx_rollback(&mut self.ctx).await
+    }
+
+    /// Commit and return the server's optional StrictSerializableRW write timestamp.
+    ///
+    /// Returns `None` when the server omitted the timestamp, including read-only transactions.
+    /// Calling this after a prior commit also returns `None`.
+    pub async fn commit_with_timestamp(&mut self) -> YdbResult<Option<VirtualTimestamp>> {
+        tx_commit_with_timestamp(&mut self.ctx).await
     }
 
     /// Materialize the transaction and return its session-scoped identity.
@@ -577,6 +604,7 @@ pub use retry_tx::{RetryTxAttempt, RetryTxBuilder};
 pub use script::{ExecuteScriptBuilder, FetchScriptResultsBuilder};
 pub use script::{ExecuteScriptOperation, FetchScriptResult};
 pub use stream_facade::{QueryStats, QueryStream};
+pub use virtual_timestamp::VirtualTimestamp;
 
 #[cfg(test)]
 mod unit_tests {
@@ -648,6 +676,7 @@ mod unit_tests {
             TransactionOptions::default(),
             None,
             MetricsNames::new(None),
+            Arc::from("bench"),
         )
     }
 
@@ -691,6 +720,7 @@ mod unit_tests {
             pool.clone(),
             RetrySettings::dont_retry(),
             MetricsNames::new(None),
+            Arc::from("bench"),
         );
         let observed_pool = pool.clone();
 
@@ -716,6 +746,7 @@ mod unit_tests {
             pool,
             RetrySettings::dont_retry(),
             MetricsNames::new(None),
+            Arc::from("bench"),
         );
         let callback_called = Arc::new(AtomicBool::new(false));
         let observed_called = callback_called.clone();
@@ -742,6 +773,7 @@ mod unit_tests {
             pool,
             RetrySettings::dont_retry(),
             MetricsNames::new(None),
+            Arc::from("bench"),
         );
         let callback_called = Arc::new(AtomicBool::new(false));
 
@@ -781,6 +813,7 @@ mod unit_tests {
             pool,
             RetrySettings::with_default_backoff(),
             MetricsNames::new(None),
+            Arc::from("bench"),
         );
         let callback_calls = Arc::new(AtomicUsize::new(0));
         let observed_calls = callback_calls.clone();

@@ -13,6 +13,7 @@ use ydb_grpc::ydb_proto::query::ExecuteQueryResponsePart;
 
 pub(crate) struct StreamCloseMeta {
     pub tx_id: Option<String>,
+    pub commit_timestamp: Option<ydb_grpc::ydb_proto::VirtualTimestamp>,
 }
 
 #[derive(Default)]
@@ -27,6 +28,7 @@ pub(crate) struct ExecuteQueryStream {
     next_index: i64,
     pending_part: Option<ExecuteQueryResponsePart>,
     captured_tx_id: Option<String>,
+    trailing_commit_timestamp: Option<ydb_grpc::ydb_proto::VirtualTimestamp>,
     finished: bool,
     stats: Option<Duration>,
     plan: Option<RawQueryStatsPlan>,
@@ -47,6 +49,7 @@ impl ExecuteQueryStream {
             next_index: 0,
             pending_part: None,
             captured_tx_id: None,
+            trailing_commit_timestamp: None,
             finished: false,
             stats: None,
             plan: None,
@@ -63,6 +66,7 @@ impl ExecuteQueryStream {
             next_index: 0,
             pending_part: None,
             captured_tx_id: None,
+            trailing_commit_timestamp: None,
             finished: false,
             stats: None,
             plan: None,
@@ -99,6 +103,9 @@ impl ExecuteQueryStream {
     fn ingest_part(&mut self, part: &ExecuteQueryResponsePart) -> RawResult<Option<String>> {
         let tx_id = self.absorb_part_metadata(part);
         check_part(part)?;
+        // The final successful part may carry both a result set and the commit timestamp.
+        // Replace the candidate on every part; close exposes it only after EOF.
+        self.trailing_commit_timestamp = part.commit_timestamp;
         Ok(tx_id)
     }
 
@@ -344,9 +351,11 @@ impl ExecuteQueryStream {
         }
         drop(self.grpc.take());
         self.finished = true;
+        self.trailing_commit_timestamp = None;
     }
 
     pub async fn close(&mut self) -> RawResult<StreamCloseMeta> {
+        let reached_eof = self.finished;
         if let Some(part) = self.pending_part.take() {
             self.absorb_part_metadata(&part);
         }
@@ -354,6 +363,11 @@ impl ExecuteQueryStream {
         self.finished = true;
         Ok(StreamCloseMeta {
             tx_id: self.captured_tx_id.take(),
+            commit_timestamp: if reached_eof {
+                self.trailing_commit_timestamp.take()
+            } else {
+                None
+            },
         })
     }
 }
@@ -398,6 +412,7 @@ mod tests {
             }),
             exec_stats: None,
             tx_meta: None,
+            ..Default::default()
         }
     }
 
@@ -409,6 +424,7 @@ mod tests {
             result_set: None,
             exec_stats: None,
             tx_meta: None,
+            ..Default::default()
         }
     }
 
@@ -420,6 +436,7 @@ mod tests {
             result_set: None,
             exec_stats: None,
             tx_meta: None,
+            ..Default::default()
         }
     }
 
@@ -515,5 +532,85 @@ mod tests {
 
         assert_eq!(sets.len(), 1);
         assert_eq!(row_values(&sets[0]), vec![10]);
+    }
+
+    #[tokio::test]
+    async fn commit_timestamp_requires_successful_trailing_part() {
+        let timestamp = ydb_grpc::ydb_proto::VirtualTimestamp {
+            plan_step: 42,
+            tx_id: u64::MAX,
+        };
+        let mut early = metadata_only_part(0);
+        early.commit_timestamp = Some(timestamp);
+        let mut trailing = metadata_only_part(0);
+        trailing.commit_timestamp = Some(timestamp);
+
+        let mut stream = ExecuteQueryStream::from_test_parts(vec![
+            early.clone(),
+            part_with_row(0, "a", 10),
+            trailing,
+        ]);
+        stream.materialize_all_result_sets().await.unwrap();
+        let observed = stream.close().await.unwrap().commit_timestamp.unwrap();
+        assert_eq!(observed.plan_step, timestamp.plan_step);
+        assert_eq!(observed.tx_id, timestamp.tx_id);
+
+        let mut non_trailing =
+            ExecuteQueryStream::from_test_parts(vec![early, metadata_only_part(0)]);
+        non_trailing.materialize_all_result_sets().await.unwrap();
+        assert!(
+            non_trailing
+                .close()
+                .await
+                .unwrap()
+                .commit_timestamp
+                .is_none()
+        );
+
+        let mut absent = ExecuteQueryStream::from_test_parts(vec![metadata_only_part(0)]);
+        absent.materialize_all_result_sets().await.unwrap();
+        assert!(absent.close().await.unwrap().commit_timestamp.is_none());
+
+        let mut result_part = part_with_row(0, "a", 10);
+        result_part.commit_timestamp = Some(timestamp);
+        let mut with_result_set = ExecuteQueryStream::from_test_parts(vec![result_part.clone()]);
+        with_result_set.materialize_all_result_sets().await.unwrap();
+        assert_eq!(
+            with_result_set.close().await.unwrap().commit_timestamp,
+            Some(timestamp)
+        );
+
+        let mut earlier_result_set =
+            ExecuteQueryStream::from_test_parts(vec![result_part, metadata_only_part(0)]);
+        earlier_result_set
+            .materialize_all_result_sets()
+            .await
+            .unwrap();
+        assert!(
+            earlier_result_set
+                .close()
+                .await
+                .unwrap()
+                .commit_timestamp
+                .is_none()
+        );
+
+        let mut unread_part = metadata_only_part(0);
+        unread_part.commit_timestamp = Some(timestamp);
+        let mut unread_trailing = ExecuteQueryStream::from_test_parts(vec![unread_part]);
+        assert!(
+            unread_trailing
+                .close()
+                .await
+                .unwrap()
+                .commit_timestamp
+                .is_none()
+        );
+
+        let mut failed = metadata_only_part(0);
+        failed.status = StatusCode::BadRequest as i32;
+        failed.commit_timestamp = Some(timestamp);
+        let mut stream = ExecuteQueryStream::from_test_parts(vec![failed]);
+        assert!(stream.materialize_all_result_sets().await.is_err());
     }
 }

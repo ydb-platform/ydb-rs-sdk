@@ -53,6 +53,7 @@ fn success_part(tx_id: Option<&str>) -> ExecuteQueryResponsePart {
         result_set: None,
         exec_stats: None,
         tx_meta: tx_id.map(|id| TransactionMeta { id: id.to_string() }),
+        ..Default::default()
     }
 }
 
@@ -64,6 +65,7 @@ fn failing_part(status: StatusCode) -> ExecuteQueryResponsePart {
         result_set: None,
         exec_stats: None,
         tx_meta: None,
+        ..Default::default()
     }
 }
 
@@ -353,6 +355,7 @@ impl Handler for ScriptedCommitHandler {
                 let _ = reply_tx.send(Ok(tonic::Response::new(CommitTransactionResponse {
                     status: status as i32,
                     issues: vec![],
+                    ..Default::default()
                 })));
                 None
             }

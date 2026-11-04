@@ -18,9 +18,9 @@ use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use ydb_grpc::ydb_proto::query::v1::query_service_client::QueryServiceClient;
 use ydb_grpc::ydb_proto::query::{
-    AttachSessionRequest, BeginTransactionRequest, CommitTransactionRequest, CreateSessionRequest,
-    DeleteSessionRequest, ExecuteQueryRequest, ExecuteQueryResponsePart,
-    RollbackTransactionRequest, SessionState,
+    AttachSessionRequest, BeginTransactionRequest, CommitTransactionRequest,
+    CommitTransactionResponse, CreateSessionRequest, DeleteSessionRequest, ExecuteQueryRequest,
+    ExecuteQueryResponsePart, RollbackTransactionRequest, SessionState,
 };
 
 /// gRPC metadata: enable server-side session balancing on CreateSession.
@@ -158,7 +158,11 @@ impl RawQueryClient {
     }
 
     #[instrument(name = "ydb.grpc.CommitTransaction", skip_all, fields(db.system.name = "ydb", ydb.session.id = %session_id, ydb.tx.id = %tx_id), err)]
-    pub async fn commit_transaction(&mut self, session_id: &str, tx_id: &str) -> RawResult<()> {
+    pub async fn commit_transaction(
+        &mut self,
+        session_id: &str,
+        tx_id: &str,
+    ) -> RawResult<Option<ydb_grpc::ydb_proto::VirtualTimestamp>> {
         let response = self
             .service
             .commit_transaction(CommitTransactionRequest {
@@ -167,7 +171,7 @@ impl RawQueryClient {
             })
             .await?;
         let inner = response.into_inner();
-        check_status(inner.status, &inner.issues)
+        parse_commit_response(inner)
     }
 
     #[instrument(name = "ydb.grpc.RollbackTransaction", skip_all, fields(db.system.name = "ydb", ydb.session.id = %session_id, ydb.tx.id = %tx_id), err)]
@@ -181,5 +185,45 @@ impl RawQueryClient {
             .await?;
         let inner = response.into_inner();
         check_status(inner.status, &inner.issues)
+    }
+}
+
+fn parse_commit_response(
+    response: CommitTransactionResponse,
+) -> RawResult<Option<ydb_grpc::ydb_proto::VirtualTimestamp>> {
+    check_status(response.status, &response.issues)?;
+    Ok(response.commit_timestamp)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ydb_grpc::ydb_proto::status_ids::StatusCode;
+
+    #[test]
+    fn commit_timestamp_is_optional_and_requires_success() {
+        let response = CommitTransactionResponse {
+            status: StatusCode::Success as i32,
+            commit_timestamp: Some(ydb_grpc::ydb_proto::VirtualTimestamp {
+                plan_step: u64::MAX,
+                tx_id: u64::MAX - 1,
+            }),
+            ..Default::default()
+        };
+        let timestamp = parse_commit_response(response.clone()).unwrap().unwrap();
+        assert_eq!(timestamp.plan_step, u64::MAX);
+        assert_eq!(timestamp.tx_id, u64::MAX - 1);
+
+        let absent = CommitTransactionResponse {
+            commit_timestamp: None,
+            ..response.clone()
+        };
+        assert!(parse_commit_response(absent).unwrap().is_none());
+
+        let failed = CommitTransactionResponse {
+            status: StatusCode::BadRequest as i32,
+            ..response
+        };
+        assert!(parse_commit_response(failed).is_err());
     }
 }

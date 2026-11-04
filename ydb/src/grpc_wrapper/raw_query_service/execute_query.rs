@@ -210,6 +210,7 @@ mod unit_tests {
             result_set: None,
             exec_stats: stats,
             tx_meta: None,
+            ..Default::default()
         }
     }
 

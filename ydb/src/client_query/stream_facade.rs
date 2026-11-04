@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::closure;
@@ -13,6 +14,7 @@ use super::exec::{
     TxExecContext, apply_stream_tx_id, client_begin_stream_once, resolve_commit_tx,
     tx_begin_stream, tx_cancel_query, tx_finish_query, tx_handle_query_error,
 };
+use super::virtual_timestamp::VirtualTimestamp;
 
 /// Streaming query result. Drain all result sets and call [`Self::close`] to return an owned
 /// pooled session for reuse. Dropping the stream cancels it and discards that session.
@@ -21,6 +23,7 @@ use super::exec::{
 pub struct QueryStream<'a> {
     stream: ExecuteQueryStream,
     lifecycle: QueryStreamLifecycle<'a>,
+    timestamp_scope: Arc<str>,
 }
 
 enum QueryStreamLifecycle<'a> {
@@ -60,10 +63,11 @@ impl QueryStream<'_> {
 }
 
 impl<'a> QueryStream<'a> {
-    pub(crate) fn from_client(opened: OpenedClientQueryStream) -> Self {
+    pub(crate) fn from_client(opened: OpenedClientQueryStream, timestamp_scope: Arc<str>) -> Self {
         Self {
             stream: opened.stream,
             lifecycle: QueryStreamLifecycle::Active(QueryStreamOwner::Client(opened.session)),
+            timestamp_scope,
         }
     }
 
@@ -72,12 +76,14 @@ impl<'a> QueryStream<'a> {
         context: &'a mut TxExecContext,
         commit_at_end: bool,
     ) -> Self {
+        let timestamp_scope = context.timestamp_scope.clone();
         Self {
             stream,
             lifecycle: QueryStreamLifecycle::Active(QueryStreamOwner::Tx {
                 context,
                 commit_at_end,
             }),
+            timestamp_scope,
         }
     }
 
@@ -155,11 +161,22 @@ impl<'a> QueryStream<'a> {
             .map(|total_duration| QueryStats { total_duration })
     }
 
-    pub async fn close(mut self) -> YdbResult<()> {
+    pub async fn close(self) -> YdbResult<()> {
+        self.close_with_commit_timestamp().await.map(|_| ())
+    }
+
+    /// Finish the stream and return the optional commit timestamp from its final trailing part.
+    ///
+    /// Fully drain the stream before calling this method. Closing before EOF returns `None`
+    /// because the trailing response has not been observed.
+    pub async fn close_with_commit_timestamp(mut self) -> YdbResult<Option<VirtualTimestamp>> {
         match self.stream.close().await {
             Ok(meta) => {
                 self.apply_transaction_id(meta.tx_id)?;
-                self.finish()
+                self.finish()?;
+                Ok(meta.commit_timestamp.map(|timestamp| {
+                    VirtualTimestamp::from_proto(timestamp, self.timestamp_scope.clone())
+                }))
             }
             Err(err) => {
                 let ydb_err = YdbError::from(err);
@@ -183,7 +200,7 @@ pub(crate) async fn materialize_query(
     text: String,
     params: HashMap<String, Value>,
     opts: CallOptions,
-) -> YdbResult<Vec<ResultSet>> {
+) -> YdbResult<MaterializedQuery> {
     let commit_at_end = resolve_commit_tx(core, &opts);
     match core {
         ExecTarget::Client(ctx) => {
@@ -204,23 +221,33 @@ pub(crate) async fn materialize_query(
     }
 }
 
+pub(crate) struct MaterializedQuery {
+    pub result_sets: Vec<ResultSet>,
+    pub commit_timestamp: Option<VirtualTimestamp>,
+}
+
 async fn materialize_client_once(
     ctx: &ClientExecContext,
     text: &str,
     params: &HashMap<String, Value>,
     opts: &CallOptions,
-) -> YdbResult<Vec<ResultSet>> {
+) -> YdbResult<MaterializedQuery> {
     let mut opened = client_begin_stream_once(ctx, text, params, opts, true).await?;
-    let result: YdbResult<Vec<RawResultSet>> = async {
+    let result: YdbResult<_> = async {
         let raw_sets = drain_result_sets(&mut opened.stream).await?;
-        opened.stream.close().await?;
-        Ok(raw_sets)
+        let meta = opened.stream.close().await?;
+        Ok((raw_sets, meta))
     }
     .await;
     match result {
-        Ok(raw_sets) => {
+        Ok((raw_sets, meta)) => {
             opened.session.release();
-            convert_result_sets(raw_sets)
+            Ok(MaterializedQuery {
+                result_sets: convert_result_sets(raw_sets)?,
+                commit_timestamp: meta.commit_timestamp.map(|timestamp| {
+                    VirtualTimestamp::from_proto(timestamp, ctx.timestamp_scope.clone())
+                }),
+            })
         }
         Err(error) => Err(error),
     }
@@ -232,7 +259,7 @@ async fn materialize_tx_once(
     params: HashMap<String, Value>,
     opts: CallOptions,
     commit_at_end: bool,
-) -> YdbResult<Vec<ResultSet>> {
+) -> YdbResult<MaterializedQuery> {
     let mut stream = tx_begin_stream(context, text, params, opts, true).await?;
     let raw_sets = match drain_result_sets(&mut stream).await {
         Ok(raw_sets) => raw_sets,
@@ -248,18 +275,24 @@ async fn materialize_tx_once(
             return Err(ydb_err);
         }
     };
-    match stream.close().await {
+    let commit_timestamp = match stream.close().await {
         Ok(meta) => {
             apply_stream_tx_id(context, meta.tx_id)?;
             tx_finish_query(context, commit_at_end)?;
+            meta.commit_timestamp.map(|timestamp| {
+                VirtualTimestamp::from_proto(timestamp, context.timestamp_scope.clone())
+            })
         }
         Err(err) => {
             let ydb_err = YdbError::from(err);
             tx_handle_query_error(context, &ydb_err)?;
             return Err(ydb_err);
         }
-    }
-    Ok(sets)
+    };
+    Ok(MaterializedQuery {
+        result_sets: sets,
+        commit_timestamp,
+    })
 }
 
 async fn drain_result_sets(stream: &mut ExecuteQueryStream) -> YdbResult<Vec<RawResultSet>> {

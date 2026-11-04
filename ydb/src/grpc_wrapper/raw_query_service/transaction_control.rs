@@ -1,12 +1,13 @@
 use ydb_grpc::ydb_proto::query::{
     OnlineModeSettings, SerializableModeSettings, SnapshotModeSettings, SnapshotRwModeSettings,
-    StaleModeSettings, TransactionControl, TransactionSettings, transaction_control,
-    transaction_settings,
+    StaleModeSettings, StrictSerializableRwModeSettings, TransactionControl, TransactionSettings,
+    transaction_control, transaction_settings,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RawTxMode {
     SerializableReadWrite,
+    StrictSerializableRW,
     SnapshotReadOnly,
     SnapshotReadWrite,
     StaleReadOnly,
@@ -37,6 +38,11 @@ fn tx_settings(mode: RawTxMode) -> TransactionSettings {
         RawTxMode::SerializableReadWrite => {
             transaction_settings::TxMode::SerializableReadWrite(SerializableModeSettings {})
         }
+        RawTxMode::StrictSerializableRW => {
+            transaction_settings::TxMode::StrictSerializableReadWrite(
+                StrictSerializableRwModeSettings {},
+            )
+        }
         RawTxMode::SnapshotReadOnly => {
             transaction_settings::TxMode::SnapshotReadOnly(SnapshotModeSettings {})
         }
@@ -59,5 +65,32 @@ fn tx_settings(mode: RawTxMode) -> TransactionSettings {
     };
     TransactionSettings {
         tx_mode: Some(tx_mode),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strict_serializable_uses_query_proto_field_seven() {
+        let settings = tx_settings_for_mode(RawTxMode::StrictSerializableRW);
+        assert!(matches!(
+            settings.tx_mode,
+            Some(transaction_settings::TxMode::StrictSerializableReadWrite(_))
+        ));
+        let encoded = prost::Message::encode_to_vec(&settings);
+        assert_eq!(encoded, vec![0x3a, 0x00]);
+
+        let control = begin_tx_control(RawTxMode::StrictSerializableRW, true);
+        assert!(control.commit_tx);
+        assert!(matches!(
+            control.tx_selector,
+            Some(transaction_control::TxSelector::BeginTx(
+                TransactionSettings {
+                    tx_mode: Some(transaction_settings::TxMode::StrictSerializableReadWrite(_))
+                }
+            ))
+        ));
     }
 }

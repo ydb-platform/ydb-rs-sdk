@@ -38,9 +38,17 @@ pub struct AttachSessionRequest {
     #[prost(string, tag = "1")]
     pub session_id: ::prost::alloc::string::String,
 }
+/// Sent by server when this session is being gracefully terminated.
+/// Server will attempt to complete in-flight requests within the soft deadline;
+/// requests still running at the hard deadline will be cancelled.
+/// Client should not reuse the session after receiving this hint.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SessionShutdownHint {}
+/// Sent by server when the node is being gracefully shut down.
+/// Server will attempt to complete in-flight requests within the soft deadline;
+/// requests still running at the hard deadline will be cancelled.
+/// Client should not create new sessions on this node.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NodeShutdownHint {}
@@ -87,8 +95,14 @@ pub struct SnapshotModeSettings {}
 pub struct SnapshotRwModeSettings {}
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ReadCommittedRwModeSettings {}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StrictSerializableRwModeSettings {}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TransactionSettings {
-    #[prost(oneof = "transaction_settings::TxMode", tags = "1, 2, 3, 4, 5")]
+    #[prost(oneof = "transaction_settings::TxMode", tags = "1, 2, 3, 4, 5, 6, 7")]
     pub tx_mode: ::core::option::Option<transaction_settings::TxMode>,
 }
 /// Nested message and enum types in `TransactionSettings`.
@@ -106,6 +120,10 @@ pub mod transaction_settings {
         SnapshotReadOnly(super::SnapshotModeSettings),
         #[prost(message, tag = "5")]
         SnapshotReadWrite(super::SnapshotRwModeSettings),
+        #[prost(message, tag = "6")]
+        ReadCommittedReadWrite(super::ReadCommittedRwModeSettings),
+        #[prost(message, tag = "7")]
+        StrictSerializableReadWrite(super::StrictSerializableRwModeSettings),
     }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -170,6 +188,10 @@ pub struct CommitTransactionResponse {
     pub status: i32,
     #[prost(message, repeated, tag = "2")]
     pub issues: ::prost::alloc::vec::Vec<super::issue::IssueMessage>,
+    /// Commit timestamp (PlanStep, TxId) for StrictSerializableRW write transactions.
+    /// Present only on SUCCESS and when the transaction had write effects.
+    #[prost(message, optional, tag = "3")]
+    pub commit_timestamp: ::core::option::Option<super::VirtualTimestamp>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -278,6 +300,12 @@ pub struct ExecuteQueryResponsePart {
     pub exec_stats: ::core::option::Option<super::table_stats::QueryStats>,
     #[prost(message, optional, tag = "6")]
     pub tx_meta: ::core::option::Option<TransactionMeta>,
+    #[prost(message, optional, tag = "7")]
+    pub snapshot_timestamp: ::core::option::Option<super::VirtualTimestamp>,
+    /// Commit timestamp (PlanStep, TxId) for StrictSerializableRW write transactions.
+    /// Present only in the final (trailing) part on SUCCESS and when the transaction had write effects.
+    #[prost(message, optional, tag = "8")]
+    pub commit_timestamp: ::core::option::Option<super::VirtualTimestamp>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -359,7 +387,7 @@ pub enum Syntax {
     Unspecified = 0,
     /// YQL
     YqlV1 = 1,
-    /// PostgresQL
+    /// Removed: PostgreSQL syntax is no longer supported
     Pg = 2,
 }
 impl Syntax {
