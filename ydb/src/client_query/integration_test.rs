@@ -620,10 +620,12 @@ async fn table_path_prefix_isolates_handles_and_transactions() -> YdbResult<()> 
         YdbResult::Ok(())
     };
     let mut clients = clients.into_iter();
-    tokio::try_join!(
+    let (first, second) = tokio::join!(
         verify(clients.next().expect("first scoped client"), 11),
         verify(clients.next().expect("second scoped client"), 22),
-    )?;
+    );
+    first?;
+    second?;
     let mut plain = client.query_client();
     let mut row = idem!(plain.query_row(format!(
         "SELECT value FROM `{}/query_prefix_first/items` WHERE id = 1",
