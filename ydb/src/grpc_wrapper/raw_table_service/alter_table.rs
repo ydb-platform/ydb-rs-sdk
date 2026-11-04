@@ -1,4 +1,5 @@
 use crate::grpc_wrapper::raw_table_service::create_table::RawCreateTableColumn;
+use crate::grpc_wrapper::raw_table_service::partitioning_settings::RawPartitioningSettings;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use std::collections::HashMap;
 use ydb_grpc::ydb_proto::table::{AlterTableRequest, ColumnMeta};
@@ -11,6 +12,7 @@ pub(crate) struct RawAlterTableRequest {
     pub alter_columns: Vec<RawCreateTableColumn>,
     pub alter_attributes: HashMap<String, String>,
     pub operation_params: RawOperationParams,
+    pub alter_partitioning_settings: Option<RawPartitioningSettings>,
 }
 
 impl From<RawAlterTableRequest> for AlterTableRequest {
@@ -37,6 +39,7 @@ impl From<RawAlterTableRequest> for AlterTableRequest {
                 .collect(),
             alter_attributes: value.alter_attributes,
             operation_params: Some(value.operation_params.into()),
+            alter_partitioning_settings: value.alter_partitioning_settings.map(Into::into),
             ..Default::default()
         }
     }

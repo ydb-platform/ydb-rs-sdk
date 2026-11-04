@@ -1,4 +1,5 @@
 use crate::grpc_wrapper::raw_errors::RawError;
+use crate::grpc_wrapper::raw_table_service::partitioning_settings::RawPartitioningSettings;
 use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use crate::table_service_types::{ColumnDescription, TableDescription, UnknownTypeDescription};
@@ -31,6 +32,7 @@ pub(crate) struct RawDescribeTableResult {
     pub indexes: Vec<RawIndexDescription>,
     pub store_type: RawStoreType,
     pub attributes: std::collections::HashMap<String, String>,
+    pub partitioning_settings: RawPartitioningSettings,
 }
 
 impl TryFrom<ydb_grpc::ydb_proto::table::DescribeTableResult> for RawDescribeTableResult {
@@ -57,6 +59,10 @@ impl TryFrom<ydb_grpc::ydb_proto::table::DescribeTableResult> for RawDescribeTab
             indexes,
             store_type: value.store_type.try_into()?,
             attributes: value.attributes,
+            partitioning_settings: value
+                .partitioning_settings
+                .map(RawPartitioningSettings::from)
+                .unwrap_or_default(),
         })
     }
 }
@@ -205,5 +211,6 @@ pub(crate) fn table_description_from_raw(
         indexes,
         store_type: raw_result.store_type.into(),
         attributes: raw_result.attributes,
+        partitioning_settings: raw_result.partitioning_settings.into(),
     })
 }
