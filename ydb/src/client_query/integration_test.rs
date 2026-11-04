@@ -546,6 +546,7 @@ async fn query_client_explain_reports_statement_without_plan() -> YdbResult<()> 
 }
 
 #[tokio::test]
+#[traced_test]
 #[ignore] // need YDB access
 async fn table_path_prefix_isolates_handles_and_transactions() -> YdbResult<()> {
     let client = create_client().await?;
@@ -626,13 +627,43 @@ async fn table_path_prefix_isolates_handles_and_transactions() -> YdbResult<()> 
     );
     first?;
     second?;
-    let mut plain = client.query_client();
-    let mut row = idem!(plain.query_row(format!(
-        "SELECT value FROM `{}/query_prefix_first/items` WHERE id = 1",
-        client.database()
-    )))
+    let first_table = format!("{}/query_prefix_first/items", client.database());
+    let second_prefix = format!("{}/query_prefix_second", client.database());
+    let root_relative_table = first_table
+        .strip_prefix('/')
+        .expect("absolute table path starts with /")
+        .to_owned();
+    let cases = [
+        (client.query_client(), first_table.clone()),
+        (
+            client
+                .query_client()
+                .with_table_path_prefix(second_prefix)?,
+            first_table,
+        ),
+        (
+            client.query_client().with_table_path_prefix("/")?,
+            root_relative_table,
+        ),
+    ];
+    for (mut query_client, table_path) in cases {
+        let mut row =
+            idem!(query_client.query_row(format!("SELECT value FROM `{table_path}` WHERE id = 1")))
+                .await?;
+        let value: Option<i64> = row.remove_field_by_name("value")?.try_into()?;
+        assert_eq!(value, Some(11));
+    }
+
+    let mut special_prefix = client
+        .query_client()
+        .with_table_path_prefix("/local/a\\\"\n\r\t\u{1}кириллица")?;
+    let mut row = idem!(
+        special_prefix
+            .query_row("DECLARE $value AS Int64; SELECT $value AS value;")
+            .param("$value", 42_i64)
+    )
     .await?;
-    let value: Option<i64> = row.remove_field_by_name("value")?.try_into()?;
-    assert_eq!(value, Some(11));
+    let value: i64 = row.remove_field_by_name("value")?.try_into()?;
+    assert_eq!(value, 42);
     Ok(())
 }

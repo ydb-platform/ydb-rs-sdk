@@ -400,7 +400,7 @@ mod table_path_prefix_tests {
 
     #[test]
     fn table_path_prefix_all_query_builders_preserve_sql_and_params() {
-        let sql = "--!ansi_lexer\nDECLARE $id AS Int64;\nPRAGMA TablePathPrefix = '/explicit'; SELECT $id;";
+        let sql = "DECLARE $id AS Int64;\nPRAGMA TablePathPrefix = '/explicit'; SELECT $id;";
         let mut plain = client();
         assert_eq!(plain.query_row(sql).text, sql);
         let mut scoped = plain

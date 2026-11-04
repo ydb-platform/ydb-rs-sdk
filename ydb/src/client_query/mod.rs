@@ -193,6 +193,8 @@ impl QueryClient {
     /// handle: clones copy it, another call replaces it, and `retry_tx` attempts inherit it.
     /// It applies to all queries, explain calls and scripts, but not Table or Scheme RPCs.
     /// No directory is created and the database path is not added automatically.
+    /// Absolute table names starting with `/` bypass the prefix. A prefix of `/` is accepted
+    /// and resolves relative table names from the cluster root.
     ///
     /// This simply prepends `PRAGMA TablePathPrefix` to the original SQL. Leading syntax
     /// directives such as `--!ansi_lexer` are therefore unsupported. Existing SQL and pragmas
