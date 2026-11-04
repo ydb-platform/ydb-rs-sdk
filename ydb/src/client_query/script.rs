@@ -45,7 +45,7 @@ impl<'a> ExecuteScriptBuilder<'a> {
     pub(crate) fn new(ctx: &'a ClientExecContext, text: String) -> Self {
         Self {
             ctx,
-            text,
+            text: super::prepend_table_path_prefix(ctx.table_path_prefix_pragma.as_deref(), text),
             params: HashMap::new(),
             opts: CallOptions::default(),
             results_ttl: None,

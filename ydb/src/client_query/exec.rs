@@ -47,6 +47,7 @@ impl CallOptions {
 
 #[derive(Clone)]
 pub(crate) struct ClientExecContext {
+    pub table_path_prefix_pragma: Option<String>,
     pub connection_manager: GrpcConnectionManager,
     pub session_pool: SessionPool,
     pub retry_settings: RetrySettings,
@@ -187,6 +188,7 @@ impl ActiveTx {
 }
 
 pub(crate) struct TxExecContext {
+    pub table_path_prefix_pragma: Option<String>,
     pub tx_mode: TxMode,
     /// When set, the first operation calls `BeginTransaction` RPC instead of lazy `BeginTx` in `ExecuteQuery`.
     pub begin: bool,
@@ -911,6 +913,7 @@ pub(crate) fn tx_exec_context(
     metrics_names: MetricsNames,
 ) -> TxExecContext {
     TxExecContext {
+        table_path_prefix_pragma: None,
         tx_mode: options.mode(),
         begin: options.begin(),
         state: TxState::Active(ActiveTx::new(client, lease)),
