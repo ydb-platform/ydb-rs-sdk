@@ -4,6 +4,7 @@ use crate::session_pool::SessionPoolSettings;
 use crate::test_integration_helper::{create_client, create_client_with_session_pool};
 use crate::types::Value;
 use crate::{Transaction, closure, ydb_struct};
+use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 use tracing_test::traced_test;
@@ -36,6 +37,44 @@ async fn query_client_select_one() -> YdbResult<()> {
     let mut row = idem!(qc.query_row("SELECT 1 + 1 AS sum")).await?;
     let sum: i64 = row.remove_field_by_name("sum")?.try_into()?;
     assert_eq!(sum, 2);
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn query_client_decodes_empty_lists_by_their_type() -> YdbResult<()> {
+    let client = create_client().await?;
+    let mut qc = client.query_client();
+
+    let mut row = idem!(qc.query_row(
+        "SELECT
+            ListCreate(Uint64) AS empty,
+            AsList(ListCreate(Uint64), AsList(1ul)) AS nested,
+            Just(ListCreate(Uint64)) AS optional,
+            AsStruct(ListCreate(Uint64) AS refs, 7u AS n) AS in_struct"
+    ))
+    .await?;
+
+    let empty: Vec<u64> = row.remove_field_by_name("empty")?.try_into()?;
+    assert_eq!(empty, Vec::<u64>::new());
+    let nested: Vec<Vec<u64>> = row.remove_field_by_name("nested")?.try_into()?;
+    assert_eq!(nested, vec![vec![], vec![1]]);
+    let Value::Optional(optional) = row.remove_field_by_name("optional")? else {
+        panic!("an optional column decodes as an optional value");
+    };
+    let optional: Vec<u64> = optional
+        .value
+        .expect("the optional list is present")
+        .try_into()?;
+    assert_eq!(optional, Vec::<u64>::new());
+    let mut in_struct: HashMap<String, Value> =
+        row.remove_field_by_name("in_struct")?.try_into()?;
+    let refs: Vec<u64> = in_struct
+        .remove("refs")
+        .expect("the struct has its list member")
+        .try_into()?;
+    assert_eq!(refs, Vec::<u64>::new());
     Ok(())
 }
 

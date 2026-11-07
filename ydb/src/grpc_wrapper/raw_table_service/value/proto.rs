@@ -1,5 +1,5 @@
-use crate::grpc_wrapper::raw_errors::RawError;
-use crate::grpc_wrapper::raw_table_service::value::r#type::{RawType, decode_err};
+use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
+use crate::grpc_wrapper::raw_table_service::value::r#type::{DictType, RawType, decode_err};
 use crate::grpc_wrapper::raw_table_service::value::{
     RawColumn, RawResultSet, RawTypedValue, RawValue, RawValuePair,
 };
@@ -56,6 +56,89 @@ impl TryFrom<ProtoValue> for RawValue {
         };
 
         decode_err("empty value item")
+    }
+}
+
+impl RawValue {
+    /// Decode a protobuf value as a value of type `t`.
+    ///
+    /// An empty container sets no field of its protobuf value, so the encoding
+    /// alone cannot tell an empty list from an empty struct, tuple or dict. The
+    /// type can: a container's items are decoded with their own types, so an
+    /// empty one nested at any depth decodes too. Anything the type does not
+    /// shape is decoded from its encoding alone.
+    pub(crate) fn from_proto(value: ProtoValue, t: &RawType) -> RawResult<Self> {
+        // A scalar, a null flag or a nested value names itself.
+        if value.value.is_some() {
+            return value.try_into();
+        }
+
+        match t {
+            // A present optional value is encoded as the value itself.
+            RawType::Optional(item_type) => Self::from_proto(value, item_type),
+            RawType::Tagged(tagged) => Self::from_proto(value, &tagged.item_type),
+            RawType::List(item_type) => {
+                let items = value
+                    .items
+                    .into_iter()
+                    .map(|item| Self::from_proto(item, item_type))
+                    .try_collect()?;
+                Ok(Self::Items(items))
+            }
+            RawType::Tuple(tuple) => {
+                Self::items_from_proto(value.items, tuple.elements.iter()).map(Self::Items)
+            }
+            RawType::Struct(struct_type) => Self::items_from_proto(
+                value.items,
+                struct_type.members.iter().map(|member| &member.member_type),
+            )
+            .map(Self::Items),
+            RawType::Dict(dict) => {
+                let pairs = value
+                    .pairs
+                    .into_iter()
+                    .map(|pair| RawValuePair::from_proto(pair, dict))
+                    .try_collect()?;
+                Ok(Self::Pairs(pairs))
+            }
+            _ => value.try_into(),
+        }
+    }
+
+    /// Decode `items` positionally, each with its type from `types`.
+    fn items_from_proto<'a>(
+        items: Vec<ProtoValue>,
+        types: impl ExactSizeIterator<Item = &'a RawType>,
+    ) -> RawResult<Vec<Self>> {
+        if items.len() != types.len() {
+            return decode_err(format!(
+                "{} items for a type of {} elements",
+                items.len(),
+                types.len()
+            ));
+        }
+        items
+            .into_iter()
+            .zip(types)
+            .map(|(item, t)| Self::from_proto(item, t))
+            .try_collect()
+    }
+}
+
+impl RawValuePair {
+    /// Decode a protobuf dict entry with the key and payload types of `dict`.
+    fn from_proto(pair: ydb_grpc::ydb_proto::ValuePair, dict: &DictType) -> RawResult<Self> {
+        let Some(key) = pair.key else {
+            return decode_err("empty key value in proto pair");
+        };
+        let Some(payload) = pair.payload else {
+            return decode_err("empty payload value in proto pair");
+        };
+
+        Ok(RawValuePair {
+            key: RawValue::from_proto(key, &dict.key)?,
+            payload: RawValue::from_proto(payload, &dict.payload)?,
+        })
     }
 }
 
@@ -178,7 +261,7 @@ impl TryFrom<ydb_grpc::ydb_proto::TypedValue> for RawTypedValue {
         };
 
         let v = if let Some(v) = value.value {
-            RawValue::try_from(v)?
+            RawValue::from_proto(v, &t)?
         } else {
             RawValue::NullFlag
         };
@@ -194,25 +277,47 @@ impl TryFrom<ydb_grpc::ydb_proto::ResultSet> for RawResultSet {
     type Error = RawError;
 
     fn try_from(proto_result_set: ydb_grpc::ydb_proto::ResultSet) -> Result<Self, Self::Error> {
-        let columns = proto_result_set
+        Self::from_proto_part(proto_result_set, &[])
+    }
+}
+
+impl RawResultSet {
+    /// Decode one part of a result set whose earlier parts described
+    /// `known_columns`.
+    ///
+    /// A streamed result set describes its columns in its first part only, so
+    /// a later part's rows are decoded with the columns already known. The
+    /// part keeps the columns it carries itself, possibly none.
+    pub(crate) fn from_proto_part(
+        proto_result_set: ydb_grpc::ydb_proto::ResultSet,
+        known_columns: &[RawColumn],
+    ) -> RawResult<Self> {
+        let columns: Vec<RawColumn> = proto_result_set
             .columns
             .into_iter()
             .map(RawColumn::try_from)
             .try_collect()?;
+        let row_columns = if columns.is_empty() {
+            known_columns
+        } else {
+            &columns
+        };
 
-        let raw_rows: Vec<RawValue> = proto_result_set
+        // A row is a struct of the columns, each cell decoded with its
+        // column's type.
+        let rows: Vec<Vec<RawValue>> = proto_result_set
             .rows
             .into_iter()
-            .map(|item| item.try_into())
-            .try_collect()?;
-
-        let rows: Vec<Vec<RawValue>> = raw_rows
-            .into_iter()
-            .map(|item_row| match item_row {
-                RawValue::Items(items) => Ok(items),
-                item => Err(RawError::custom(format!(
-                    "unexpected item type while parse rawset, expect items: {item:?}"
-                ))),
+            .map(|row| {
+                if row.value.is_some() || !row.pairs.is_empty() {
+                    return Err(RawError::custom(format!(
+                        "unexpected item type while parse rawset, expect items: {row:?}"
+                    )));
+                }
+                RawValue::items_from_proto(
+                    row.items,
+                    row_columns.iter().map(|column| &column.column_type),
+                )
             })
             .try_collect()?;
 
