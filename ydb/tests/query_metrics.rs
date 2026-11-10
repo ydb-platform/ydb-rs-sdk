@@ -557,7 +557,7 @@ async fn optional_row_into_future_maps_to_option() -> YdbResult<()> {
 
     assert!(row.is_some(), "optional() must map a present row to Some");
     let mut row = row.expect("checked Some");
-    let val: i64 = row.remove_field_by_name("val")?.try_into().unwrap();
+    let val: i64 = row.take("val")?;
     assert_eq!(val, 42);
 
     Ok(())

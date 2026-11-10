@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut set_count = 0;
             while let Some(result_set) = stream.next_result_set().await? {
                 for mut row in result_set {
-                    let _ = row.remove_field_by_name("a");
+                    let _ = row.take::<ydb::Value, _>("a");
                 }
                 set_count += 1;
             }

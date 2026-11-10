@@ -27,7 +27,7 @@ async fn main() -> YdbResult<()> {
         .query_client()
         .query_row("SELECT 14 * 3 AS product")
         .await?;
-    let product: i32 = row.remove_field_by_name("product")?.try_into()?;
+    let product: i32 = row.take("product")?;
 
     println!("product: {product}");
     Ok(())

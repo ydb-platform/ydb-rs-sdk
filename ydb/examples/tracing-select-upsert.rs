@@ -92,7 +92,7 @@ async fn start_app() -> YdbResult<()> {
     let sum: Option<i64> = query_client
         .retry_tx(closure!(async |tx: &mut Transaction| {
             let mut row = tx.query_row("SELECT SUM(id) AS sum FROM test").await?;
-            Ok(row.remove_field_by_name("sum")?.try_into()?)
+            Ok(row.take("sum")?)
         }))
         .await
         .map_err(|e| YdbError::Transport(format!("{e:?}")))?;
@@ -110,8 +110,8 @@ async fn start_app() -> YdbResult<()> {
         .map_err(|e| YdbError::Transport(format!("{e:?}")))?;
 
     for mut row in rows {
-        let id: Option<i64> = row.remove_field_by_name("id")?.try_into()?;
-        let val: Option<String> = row.remove_field_by_name("val")?.try_into()?;
+        let id: Option<i64> = row.take("id")?;
+        let val: Option<String> = row.take("val")?;
         println!("row id '{}' with value '{}'", id.unwrap(), val.unwrap())
     }
 

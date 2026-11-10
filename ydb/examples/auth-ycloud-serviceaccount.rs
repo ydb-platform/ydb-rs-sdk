@@ -33,7 +33,7 @@ async fn main() -> YdbResult<()> {
         .query_client()
         .query_row("SELECT 1 + 1 as sum")
         .await?;
-    let sum: i32 = row.remove_field_by_name("sum")?.try_into()?;
+    let sum: i32 = row.take("sum")?;
     info!("sum: {}", sum);
     Ok(())
 }
