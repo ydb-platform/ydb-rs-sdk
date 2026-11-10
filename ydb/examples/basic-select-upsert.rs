@@ -33,7 +33,7 @@ async fn main() -> YdbResult<()> {
 
     // Select one row result
     let mut row = qc.query_row("SELECT SUM(id) AS sum FROM test").await?;
-    let sum: Option<i64> = row.remove_field_by_name("sum")?.try_into()?;
+    let sum: Option<i64> = row.take("sum")?;
     println!("sum: {}", sum.unwrap_or(-1));
 
     // select first 10 rows
@@ -43,8 +43,8 @@ async fn main() -> YdbResult<()> {
     let rows: Vec<Row> = result_set.rows().collect();
 
     for mut row in rows {
-        let id: Option<i64> = row.remove_field_by_name("id")?.try_into()?;
-        let val: Option<String> = row.remove_field_by_name("val")?.try_into()?;
+        let id: Option<i64> = row.take("id")?;
+        let val: Option<String> = row.take("val")?;
         println!("row id '{}' with value '{}'", id.unwrap(), val.unwrap())
     }
     Ok(())

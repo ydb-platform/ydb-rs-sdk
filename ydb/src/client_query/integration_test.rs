@@ -34,7 +34,7 @@ async fn query_client_select_one() -> YdbResult<()> {
     let mut qc = client.query_client();
 
     let mut row = idem!(qc.query_row("SELECT 1 + 1 AS sum")).await?;
-    let sum: i64 = row.remove_field_by_name("sum")?.try_into()?;
+    let sum: i64 = row.take("sum")?;
     assert_eq!(sum, 2);
     Ok(())
 }
@@ -80,7 +80,7 @@ async fn query_client_autocommit_by_default() -> YdbResult<()> {
     .await?;
 
     let mut row = idem!(qc.query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))).await?;
-    let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
+    let val: Option<i64> = row.take("val")?;
     assert_eq!(val, Some(77));
 
     idem!(qc.exec(format!("DROP TABLE {table_name}"))).await?;
@@ -140,7 +140,7 @@ async fn query_client_retry_tx_upsert() -> YdbResult<()> {
     .await?;
 
     let mut row = idem!(qc.query_row(format!("SELECT COUNT(*) AS cnt FROM {table_name}"))).await?;
-    let cnt: u64 = row.remove_field_by_name("cnt")?.try_into()?;
+    let cnt: u64 = row.take("cnt")?;
     assert_eq!(cnt, 3);
 
     idem!(qc.exec(format!("DROP TABLE {table_name}"))).await?;
@@ -157,7 +157,7 @@ async fn query_client_pooled_session_select() -> YdbResult<()> {
     let mut qc = client.query_client();
 
     let mut row = idem!(qc.query_row("SELECT 1 + 1 AS sum")).await?;
-    let sum: i64 = row.remove_field_by_name("sum")?.try_into()?;
+    let sum: i64 = row.take("sum")?;
     assert_eq!(sum, 2);
     Ok(())
 }
@@ -170,7 +170,7 @@ async fn query_client_implicit_session_select() -> YdbResult<()> {
     let mut qc = client.query_client();
 
     let mut row = idem!(qc.query_row("SELECT 1 + 1 AS sum").with_implicit_session()).await?;
-    let sum: i64 = row.remove_field_by_name("sum")?.try_into()?;
+    let sum: i64 = row.take("sum")?;
     assert_eq!(sum, 2);
 
     let stats = client.session_pool_stats();
@@ -189,7 +189,7 @@ async fn query_client_snapshot_read_only_tx() -> YdbResult<()> {
     let value: i64 = qc
         .retry_tx(closure!(async |tx: &mut Transaction| {
             let mut row = tx.query_row("SELECT 42 AS v").await?;
-            Ok(row.remove_field_by_name("v")?.try_into()?)
+            Ok(row.take("v")?)
         }))
         .isolation(TxMode::SnapshotReadOnly)
         .timeout(TEST_TIMEOUT)
@@ -234,7 +234,7 @@ async fn query_lazy_tx_materializes_on_first_query() -> YdbResult<()> {
         let mut row = tx
             .query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))
             .await?;
-        let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
+        let val: Option<i64> = row.take("val")?;
         assert_eq!(val, Some(42));
 
         Ok(())
@@ -243,7 +243,7 @@ async fn query_lazy_tx_materializes_on_first_query() -> YdbResult<()> {
     .await?;
 
     let mut row = idem!(qc.query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))).await?;
-    let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
+    let val: Option<i64> = row.take("val")?;
     assert_eq!(val, Some(42));
 
     idem!(qc.exec(format!("DROP TABLE {table_name}"))).await?;
@@ -288,7 +288,7 @@ async fn query_explicit_begin_via_begin() -> YdbResult<()> {
         );
 
         let mut row = tx.query_row("SELECT 1 AS v").await?;
-        let v: i64 = row.remove_field_by_name("v")?.try_into()?;
+        let v: i64 = row.take("v")?;
         assert_eq!(v, 1);
         Ok(())
     }))
@@ -356,7 +356,7 @@ async fn query_with_commit_on_last_query() -> YdbResult<()> {
     .await?;
 
     let mut row = idem!(qc.query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))).await?;
-    let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
+    let val: Option<i64> = row.take("val")?;
     assert_eq!(val, Some(99));
 
     idem!(qc.exec(format!("DROP TABLE {table_name}"))).await?;
@@ -399,11 +399,11 @@ async fn query_execute_script() -> YdbResult<()> {
     assert_eq!(upserted, UPSERT_ROWS_COUNT as u32);
 
     let mut row = idem!(qc.query_row(format!("SELECT COUNT(*) AS cnt FROM {table_name}"))).await?;
-    let rows_from_db: Option<u64> = row.remove_field_by_name("cnt")?.try_into()?;
+    let rows_from_db: Option<u64> = row.take("cnt")?;
     assert_eq!(rows_from_db.unwrap_or(0), UPSERT_ROWS_COUNT as u64);
 
     let mut row = idem!(qc.query_row(format!("SELECT SUM(val) AS s FROM {table_name}"))).await?;
-    let checksum_from_db: Option<i64> = row.remove_field_by_name("s")?.try_into()?;
+    let checksum_from_db: Option<i64> = row.take("s")?;
     assert_eq!(checksum_from_db.unwrap_or(0) as u64, EXPECTED_CHECKSUM);
 
     let op = qc
@@ -442,7 +442,7 @@ async fn query_execute_script() -> YdbResult<()> {
 
         for mut row in page.result_set {
             rows_count += 1;
-            let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
+            let val: Option<i64> = row.take("val")?;
             checksum += val.unwrap_or(0) as u64;
         }
 

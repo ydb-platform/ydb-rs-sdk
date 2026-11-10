@@ -135,7 +135,7 @@ where
 ///                 .query_row("SELECT balance FROM accounts WHERE id = $id")
 ///                 .param("$id", user_id)
 ///                 .await?;
-///             let balance: i64 = row.remove_field_by_name("balance")?.try_into()?;
+///             let balance: i64 = row.take("balance")?;
 ///
 ///             if balance < 100 {
 ///                 tx.rollback().await?;
