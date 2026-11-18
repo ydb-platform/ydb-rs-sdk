@@ -9,3 +9,10 @@ services:
     ports:
       - "2135:2135" # port with tls
       - "2136:2136" # port without tls
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686" # Web UI
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP

@@ -1,14 +1,16 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use tracing::warn;
+use tracing::{Instrument, warn};
 
-use crate::grpc_wrapper::raw_errors::RawResult;
+use crate::YdbError;
+use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 use crate::grpc_wrapper::raw_query_service::execute_query::{
     RawQueryStatsPlan, append_rows_from_part, check_part, plan_from_part, stats_from_part,
     tx_id_from_part,
 };
 use crate::grpc_wrapper::raw_table_service::value::RawResultSet;
+use crate::observability::tracing::execute_query::ExecuteQueryCompositeSpan;
 use ydb_grpc::ydb_proto::query::ExecuteQueryResponsePart;
 
 pub(crate) struct StreamCloseMeta {
@@ -28,10 +30,12 @@ pub(crate) struct ExecuteQueryStream {
     pending_part: Option<ExecuteQueryResponsePart>,
     captured_tx_id: Option<String>,
     finished: bool,
+    eof: bool,
     stats: Option<Duration>,
     plan: Option<RawQueryStatsPlan>,
     #[cfg(test)]
     test_parts: Option<Vec<ExecuteQueryResponsePart>>,
+    composite_span: Option<ExecuteQueryCompositeSpan>,
 }
 
 impl Drop for ExecuteQueryStream {
@@ -41,17 +45,22 @@ impl Drop for ExecuteQueryStream {
 }
 
 impl ExecuteQueryStream {
-    pub fn new(stream: tonic::Streaming<ExecuteQueryResponsePart>) -> Self {
+    pub fn with_composite_span(
+        stream: tonic::Streaming<ExecuteQueryResponsePart>,
+        composite_span: ExecuteQueryCompositeSpan,
+    ) -> Self {
         Self {
             grpc: Some(stream),
             next_index: 0,
             pending_part: None,
             captured_tx_id: None,
             finished: false,
+            eof: false,
             stats: None,
             plan: None,
             #[cfg(test)]
             test_parts: None,
+            composite_span: Some(composite_span),
         }
     }
 
@@ -64,14 +73,63 @@ impl ExecuteQueryStream {
             pending_part: None,
             captured_tx_id: None,
             finished: false,
+            eof: false,
             stats: None,
             plan: None,
             test_parts: Some(parts),
+            composite_span: None,
         }
     }
 
     pub fn stats(&self) -> Option<Duration> {
         self.stats
+    }
+
+    fn finish_success(&mut self) {
+        if let Some(composite_span) = self.composite_span.as_mut() {
+            composite_span.finish_success();
+        }
+    }
+
+    fn finish_error(&mut self, error: &RawError) {
+        if let Some(composite_span) = self.composite_span.as_mut() {
+            let error = YdbError::from(error.clone());
+            composite_span.finish_error(&error);
+        }
+    }
+
+    pub(crate) fn attach_span(&mut self, span: tracing::Span) {
+        if let Some(composite_span) = self.composite_span.as_mut() {
+            composite_span.attach(span);
+        }
+    }
+
+    pub(crate) fn fail(&mut self, error: &YdbError) {
+        if let Some(composite_span) = self.composite_span.as_mut() {
+            composite_span.finish_error(error);
+        }
+    }
+
+    async fn recv_message(&mut self) -> Result<Option<ExecuteQueryResponsePart>, tonic::Status> {
+        let span = self
+            .composite_span
+            .as_ref()
+            .map(ExecuteQueryCompositeSpan::operation_span);
+        let Some(stream) = self.grpc.as_mut() else {
+            return Ok(None);
+        };
+        let message = stream.message();
+        match span {
+            Some(span) => message.instrument(span).await,
+            None => message.await,
+        }
+    }
+
+    fn finish_result<T>(&mut self, result: &RawResult<T>) {
+        match result {
+            Ok(_) => self.finish_success(),
+            Err(error) => self.finish_error(error),
+        }
     }
 
     /// Query plan and AST from `exec_stats`, whichever the server filled in.
@@ -115,21 +173,23 @@ impl ExecuteQueryStream {
                 Some(part) => Ok(Some(part)),
                 None => {
                     self.finished = true;
+                    self.finish_success();
                     Ok(None)
                 }
             };
         }
-        match self.grpc.as_mut() {
-            Some(stream) => match stream.message().await? {
-                Some(part) => Ok(Some(part)),
-                None => {
-                    self.finished = true;
-                    Ok(None)
-                }
-            },
-            None => {
+        match self.recv_message().await {
+            Ok(Some(part)) => Ok(Some(part)),
+            Ok(None) => {
                 self.finished = true;
+                self.eof = true;
+                self.finish_success();
                 Ok(None)
+            }
+            Err(error) => {
+                let error = RawError::from(error);
+                self.finish_error(&error);
+                Err(error)
             }
         }
     }
@@ -176,6 +236,7 @@ impl ExecuteQueryStream {
 
         drop(self.grpc.take());
         self.finished = true;
+        self.finish_result(&result);
         result
     }
 
@@ -184,15 +245,23 @@ impl ExecuteQueryStream {
         if self.pending_part.is_some() || self.grpc.is_none() || self.finished {
             return Ok(());
         }
-        let Some(stream) = self.grpc.as_mut() else {
-            return Ok(());
-        };
-        match stream.message().await? {
-            Some(part) => {
-                self.ingest_part(&part)?;
+        match self.recv_message().await {
+            Ok(Some(part)) => {
+                if let Err(error) = self.ingest_part(&part) {
+                    self.finish_error(&error);
+                    return Err(error);
+                }
                 self.pending_part = Some(part);
             }
-            None => self.finished = true,
+            Ok(None) => {
+                self.finished = true;
+                self.eof = true;
+            }
+            Err(error) => {
+                let error = RawError::from(error);
+                self.finish_error(&error);
+                return Err(error);
+            }
         }
         Ok(())
     }
@@ -212,32 +281,39 @@ impl ExecuteQueryStream {
             let part = if let Some(part) = self.pending_part.take() {
                 part
             } else {
-                match self.grpc.as_mut() {
-                    Some(stream) => match stream.message().await? {
-                        Some(part) => part,
-                        None => {
-                            self.finished = true;
-                            if rows.is_empty() && columns.is_empty() {
-                                return Ok(None);
-                            }
-                            return Ok(Some((
-                                RawResultSet {
-                                    columns,
-                                    rows,
-                                    truncated,
-                                },
-                                tx_id,
-                            )));
-                        }
-                    },
-                    None => {
+                match self.recv_message().await {
+                    Ok(Some(part)) => part,
+                    Ok(None) => {
                         self.finished = true;
-                        return Ok(None);
+                        self.eof = true;
+                        self.finish_success();
+                        if rows.is_empty() && columns.is_empty() {
+                            return Ok(None);
+                        }
+                        return Ok(Some((
+                            RawResultSet {
+                                columns,
+                                rows,
+                                truncated,
+                            },
+                            tx_id,
+                        )));
+                    }
+                    Err(error) => {
+                        let error = RawError::from(error);
+                        self.finish_error(&error);
+                        return Err(error);
                     }
                 }
             };
 
-            let tx_id_from_part = self.ingest_part(&part)?;
+            let tx_id_from_part = match self.ingest_part(&part) {
+                Ok(tx_id) => tx_id,
+                Err(error) => {
+                    self.finish_error(&error);
+                    return Err(error);
+                }
+            };
             if tx_id_from_part.is_some() {
                 tx_id = tx_id_from_part;
             }
@@ -275,13 +351,22 @@ impl ExecuteQueryStream {
                 }
             }
 
-            append_rows_from_part(&mut columns, &mut rows, &mut truncated, part)?;
+            if let Err(error) = append_rows_from_part(&mut columns, &mut rows, &mut truncated, part)
+            {
+                self.finish_error(&error);
+                return Err(error);
+            }
 
-            let stream = self.grpc.as_mut().expect("grpc stream");
             let collecting_index = self.next_index;
-            match stream.message().await? {
-                Some(next) => {
-                    let tx_id_from_part = self.ingest_part(&next)?;
+            match self.recv_message().await {
+                Ok(Some(next)) => {
+                    let tx_id_from_part = match self.ingest_part(&next) {
+                        Ok(tx_id) => tx_id,
+                        Err(error) => {
+                            self.finish_error(&error);
+                            return Err(error);
+                        }
+                    };
                     if tx_id_from_part.is_some() {
                         tx_id = tx_id_from_part;
                     }
@@ -305,10 +390,17 @@ impl ExecuteQueryStream {
                         );
                         continue;
                     }
-                    append_rows_from_part(&mut columns, &mut rows, &mut truncated, next)?;
+                    if let Err(error) =
+                        append_rows_from_part(&mut columns, &mut rows, &mut truncated, next)
+                    {
+                        self.finish_error(&error);
+                        return Err(error);
+                    }
                 }
-                None => {
+                Ok(None) => {
                     self.finished = true;
+                    self.eof = true;
+                    self.finish_success();
                     self.next_index += 1;
                     if rows.is_empty() && columns.is_empty() {
                         return Ok(None);
@@ -321,6 +413,11 @@ impl ExecuteQueryStream {
                         },
                         tx_id,
                     )));
+                }
+                Err(error) => {
+                    let error = RawError::from(error);
+                    self.finish_error(&error);
+                    return Err(error);
                 }
             }
         }
@@ -344,6 +441,9 @@ impl ExecuteQueryStream {
         }
         drop(self.grpc.take());
         self.finished = true;
+        if let Some(composite_span) = self.composite_span.as_mut() {
+            composite_span.finish_cancelled();
+        }
     }
 
     pub async fn close(&mut self) -> RawResult<StreamCloseMeta> {
@@ -352,6 +452,13 @@ impl ExecuteQueryStream {
         }
         drop(self.grpc.take());
         self.finished = true;
+        if let Some(composite_span) = self.composite_span.as_mut() {
+            if self.eof {
+                composite_span.finish_success();
+            } else {
+                composite_span.finish_cancelled();
+            }
+        }
         Ok(StreamCloseMeta {
             tx_id: self.captured_tx_id.take(),
         })
