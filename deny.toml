@@ -46,6 +46,21 @@ ignore = [
     # should stay on this backend at all is
     # https://github.com/ydb-platform/ydb-rs-sdk/issues/655.
     "RUSTSEC-2023-0071",
+    # `crypto-bigint` 0.5, secret-dependent branches in operations meant to be
+    # constant-time; fixed only in 0.7.6, there is no 0.5 release with the fix.
+    # It is reached only through `jsonwebtoken`'s `rust_crypto` backend, which
+    # links `p256`/`p384` for the ES256/ES384 algorithms. The SDK signs PS256
+    # only (`credentials.rs`), so these curves never touch the service
+    # account's key. Review when `jsonwebtoken` moves to `elliptic-curve` 0.14
+    # (which builds on `crypto-bigint` 0.7); the entry then becomes unnecessary
+    # and must go. The `jwt-aws-lc-rs` backend does not link it.
+    "RUSTSEC-2026-0387",
+    # `chrono` is unmaintained, with no known vulnerability. `pbjson-types`
+    # uses it for the protobuf `Timestamp`, and `ydb` parses the IAM token
+    # expiry with it (`credentials.rs`). The direct use can move to `time` or
+    # `jiff`; the one in `pbjson-types` cannot until `pbjson` drops it. Review
+    # when `pbjson-types` no longer depends on `chrono`.
+    "RUSTSEC-2026-0543",
 ]
 
 [licenses]
