@@ -50,7 +50,7 @@ impl<'a> ExplainQueryBuilder<'a> {
     pub(crate) fn new(ctx: &'a ClientExecContext, text: String) -> Self {
         Self {
             ctx,
-            text,
+            text: super::prepend_table_path_prefix(ctx.table_path_prefix_pragma.as_deref(), text),
             timeout: None,
         }
     }
@@ -148,6 +148,7 @@ mod unit_tests {
     /// so the only thing that can end the retry loop is the deadline.
     fn unreachable_ctx() -> ClientExecContext {
         ClientExecContext {
+            table_path_prefix_pragma: None,
             connection_manager: GrpcConnectionManager::new(
                 SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
                     Uri::from_static("http://127.0.0.1:1"),

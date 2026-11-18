@@ -544,3 +544,126 @@ async fn query_client_explain_reports_statement_without_plan() -> YdbResult<()> 
     );
     Ok(())
 }
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn table_path_prefix_isolates_handles_and_transactions() -> YdbResult<()> {
+    let client = create_client().await?;
+    let mut scheme = client.scheme_client();
+    let mut clients = Vec::new();
+    for (directory, value) in [("query_prefix_first", 11_i64), ("query_prefix_second", 22)] {
+        let path = format!("{}/{directory}", client.database());
+        scheme.make_directory(path.clone()).await?;
+        let mut scoped = client.query_client().with_table_path_prefix(path)?;
+        idem!(scoped.exec("DROP TABLE IF EXISTS items")).await?;
+        idem!(scoped.exec("CREATE TABLE items (id Int64, value Int64, PRIMARY KEY(id))")).await?;
+        idem!(
+            scoped
+                .exec("UPSERT INTO items (id, value) VALUES (1, $value)")
+                .param("$value", value)
+        )
+        .await?;
+        clients.push(scoped);
+    }
+    let verify = async |mut scoped: super::QueryClient, expected: i64| {
+        let read = "SELECT value FROM items WHERE id = $id";
+        let mut row = idem!(scoped.query_row(read).param("$id", 1_i64)).await?;
+        let value: Option<i64> = row.remove_field_by_name("value")?.try_into()?;
+        assert_eq!(value, Some(expected));
+        scoped
+            .explain(read.replace("$id", "1"))
+            .timeout(TEST_TIMEOUT)
+            .await?;
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+        let value = scoped
+            .retry_tx(closure!([&attempts], async |tx: &mut Transaction| {
+                let mut row = tx.query_row("SELECT value FROM items WHERE id = 1").await?;
+                let value: Option<i64> = row.remove_field_by_name("value")?.try_into()?;
+                if attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+                    return Err(YdbError::YdbStatusError(crate::errors::YdbStatusError::new(
+                        "retry prefix inheritance",
+                        ydb_grpc::ydb_proto::status_ids::StatusCode::Aborted as i32,
+                        Vec::new(),
+                    ))
+                    .into());
+                }
+                Ok(value)
+            }))
+            .timeout(TEST_TIMEOUT)
+            .await?;
+        assert_eq!(value, Some(expected));
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::Relaxed), 2);
+        let operation = scoped
+            .execute_script(read)
+            .param("$id", 1_i64)
+            .results_ttl(Duration::from_secs(60))
+            .timeout(TEST_TIMEOUT)
+            .await?;
+        let operation_client = client.operation_client();
+        tokio::time::timeout(Duration::from_secs(120), async {
+            while !operation_client.get_operation(&operation.id).await?.ready {
+                sleep(Duration::from_millis(100)).await;
+            }
+            YdbResult::Ok(())
+        })
+        .await
+        .expect("script must finish")?;
+        let page = scoped
+            .fetch_script_results(&operation.id)
+            .timeout(TEST_TIMEOUT)
+            .await?;
+        let mut rows = page.result_set.into_iter();
+        let mut row = rows.next().expect("script returns one row");
+        let value: Option<i64> = row.remove_field_by_name("value")?.try_into()?;
+        assert_eq!(value, Some(expected));
+        assert!(rows.next().is_none());
+        YdbResult::Ok(())
+    };
+    let mut clients = clients.into_iter();
+    let (first, second) = tokio::join!(
+        verify(clients.next().expect("first scoped client"), 11),
+        verify(clients.next().expect("second scoped client"), 22),
+    );
+    first?;
+    second?;
+    let first_table = format!("{}/query_prefix_first/items", client.database());
+    let second_prefix = format!("{}/query_prefix_second", client.database());
+    let root_relative_table = first_table
+        .strip_prefix('/')
+        .expect("absolute table path starts with /")
+        .to_owned();
+    let cases = [
+        (client.query_client(), first_table.clone()),
+        (
+            client
+                .query_client()
+                .with_table_path_prefix(second_prefix)?,
+            first_table,
+        ),
+        (
+            client.query_client().with_table_path_prefix("/")?,
+            root_relative_table,
+        ),
+    ];
+    for (mut query_client, table_path) in cases {
+        let mut row =
+            idem!(query_client.query_row(format!("SELECT value FROM `{table_path}` WHERE id = 1")))
+                .await?;
+        let value: Option<i64> = row.remove_field_by_name("value")?.try_into()?;
+        assert_eq!(value, Some(11));
+    }
+
+    let mut special_prefix = client
+        .query_client()
+        .with_table_path_prefix("/local/a\\\"\n\r\t\u{1}кириллица")?;
+    let mut row = idem!(
+        special_prefix
+            .query_row("DECLARE $value AS Int64; SELECT $value AS value;")
+            .param("$value", 42_i64)
+    )
+    .await?;
+    let value: i64 = row.remove_field_by_name("value")?.try_into()?;
+    assert_eq!(value, 42);
+    Ok(())
+}
