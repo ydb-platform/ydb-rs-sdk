@@ -390,3 +390,91 @@ fn static_credentials_unreachable_endpoint_reports_error() {
         "expected a transport error, got: {err:?}"
     );
 }
+
+#[cfg(feature = "metrics")]
+mod static_credentials_metrics_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Default)]
+    struct RegistrationCounter(AtomicUsize);
+
+    impl metrics::Recorder for RegistrationCounter {
+        fn describe_counter(
+            &self,
+            _key: metrics::KeyName,
+            _unit: Option<metrics::Unit>,
+            _description: metrics::SharedString,
+        ) {
+        }
+
+        fn describe_gauge(
+            &self,
+            _key: metrics::KeyName,
+            _unit: Option<metrics::Unit>,
+            _description: metrics::SharedString,
+        ) {
+        }
+
+        fn describe_histogram(
+            &self,
+            _key: metrics::KeyName,
+            _unit: Option<metrics::Unit>,
+            _description: metrics::SharedString,
+        ) {
+        }
+
+        fn register_counter(
+            &self,
+            _key: &metrics::Key,
+            _metadata: &metrics::Metadata<'_>,
+        ) -> metrics::Counter {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            metrics::Counter::noop()
+        }
+
+        fn register_gauge(
+            &self,
+            _key: &metrics::Key,
+            _metadata: &metrics::Metadata<'_>,
+        ) -> metrics::Gauge {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            metrics::Gauge::noop()
+        }
+
+        fn register_histogram(
+            &self,
+            _key: &metrics::Key,
+            _metadata: &metrics::Metadata<'_>,
+        ) -> metrics::Histogram {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            metrics::Histogram::noop()
+        }
+    }
+
+    #[test]
+    fn static_credentials_login_bypasses_ambient_metrics() {
+        let recorder = RegistrationCounter::default();
+        let credentials = StaticCredentials::new(
+            "root".to_string(),
+            "1234".to_string(),
+            http::uri::Uri::from_static("grpc://127.0.0.1:1/local"),
+            "/local".to_string(),
+        );
+
+        metrics::with_local_recorder(&recorder, || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let result = runtime.block_on(credentials.acquire_token());
+            assert!(result.is_err(), "the loopback endpoint must be unreachable");
+        });
+
+        assert_eq!(
+            recorder.0.load(Ordering::SeqCst),
+            0,
+            "the temporary login client must use the explicit no-op recorder"
+        );
+    }
+}

@@ -1,11 +1,13 @@
 use std::fmt;
 
 use tokio::sync::{mpsc, oneshot};
+use ydb_grpc::ydb_proto::operations::Operation;
 use ydb_grpc::ydb_proto::query::{
     AttachSessionRequest, BeginTransactionRequest, BeginTransactionResponse,
     CommitTransactionRequest, CommitTransactionResponse, CreateSessionRequest,
     CreateSessionResponse, DeleteSessionRequest, DeleteSessionResponse, ExecuteQueryRequest,
-    ExecuteQueryResponsePart, RollbackTransactionRequest, RollbackTransactionResponse,
+    ExecuteQueryResponsePart, ExecuteScriptRequest, FetchScriptResultsRequest,
+    FetchScriptResultsResponse, RollbackTransactionRequest, RollbackTransactionResponse,
     SessionState,
 };
 
@@ -23,6 +25,11 @@ pub enum QueryIncoming {
         RollbackTransactionRequest,
         OneshotTx<RollbackTransactionResponse>,
     ),
+    ExecuteScript(ExecuteScriptRequest, OneshotTx<Operation>),
+    FetchScriptResults(
+        FetchScriptResultsRequest,
+        OneshotTx<FetchScriptResultsResponse>,
+    ),
     AttachSession(AttachSessionRequest, u64),
     ExecuteQuery(ExecuteQueryRequest, u64),
 }
@@ -38,6 +45,10 @@ impl fmt::Debug for QueryIncoming {
             }
             Self::RollbackTransaction(req, _) => {
                 f.debug_tuple("RollbackTransaction").field(req).finish()
+            }
+            Self::ExecuteScript(req, _) => f.debug_tuple("ExecuteScript").field(req).finish(),
+            Self::FetchScriptResults(req, _) => {
+                f.debug_tuple("FetchScriptResults").field(req).finish()
             }
             Self::AttachSession(req, id) => {
                 f.debug_tuple("AttachSession").field(req).field(id).finish()

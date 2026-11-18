@@ -4,7 +4,7 @@ use ydb_grpc::ydb_proto::topic::v1::topic_service_client::TopicServiceClient;
 use ydb_grpc::ydb_proto::topic::{stream_read_message, stream_write_message};
 
 use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
-use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
+use crate::grpc_wrapper::grpc_stream_wrapper::{AsyncGrpcStreamWrapper, GrpcStreamMetrics};
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::raw_topic_service::alter_topic::RawAlterTopicRequest;
@@ -22,6 +22,7 @@ use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 
 pub(crate) struct RawTopicClient {
     service: TopicServiceClient<InterceptedChannel>,
+    stream_metrics: Option<GrpcStreamMetrics>,
 }
 
 impl WithGrpcMaxMessageSize for RawTopicClient {
@@ -32,12 +33,18 @@ impl WithGrpcMaxMessageSize for RawTopicClient {
             .max_encoding_message_size(bytes);
         self
     }
+
+    fn with_stream_metrics(mut self, metrics: GrpcStreamMetrics) -> Self {
+        self.stream_metrics = Some(metrics);
+        self
+    }
 }
 
 impl RawTopicClient {
     pub fn new(service: InterceptedChannel) -> Self {
         Self {
             service: TopicServiceClient::new(service),
+            stream_metrics: None,
         }
     }
 
@@ -119,14 +126,21 @@ impl RawTopicClient {
         };
         tx.send(mess)?;
 
-        let request_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
+        let stream_metrics = self.stream_metrics.as_ref().map(|metrics| {
+            metrics.bind(crate::grpc_wrapper::metrics_interceptor::TOPIC_STREAM_READ_PATH)
+        });
+        let request_stream = crate::grpc_wrapper::grpc_stream_wrapper::MetricsRequestStream::new(
+            rx,
+            stream_metrics.clone(),
+        );
         let stream_reader_result = self.service.stream_read(request_stream).await;
         let response_stream = stream_reader_result?.into_inner();
 
-        Ok(AsyncGrpcStreamWrapper::<
-            stream_read_message::FromClient,
-            stream_read_message::FromServer,
-        >::new(tx, response_stream))
+        let wrapper = match stream_metrics {
+            Some(metrics) => AsyncGrpcStreamWrapper::new_with_metrics(tx, response_stream, metrics),
+            None => AsyncGrpcStreamWrapper::new(tx, response_stream),
+        };
+        Ok(wrapper)
     }
 
     #[instrument(name = "ydb.grpc.StreamWrite", skip_all, fields(ydb.topic.path = %init_req_body.path), err)]
@@ -148,14 +162,21 @@ impl RawTopicClient {
         };
         tx.send(mess)?;
 
-        let request_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
+        let stream_metrics = self.stream_metrics.as_ref().map(|metrics| {
+            metrics.bind(crate::grpc_wrapper::metrics_interceptor::TOPIC_STREAM_WRITE_PATH)
+        });
+        let request_stream = crate::grpc_wrapper::grpc_stream_wrapper::MetricsRequestStream::new(
+            rx,
+            stream_metrics.clone(),
+        );
         let stream_writer_result = self.service.stream_write(request_stream).await;
         let response_stream = stream_writer_result?.into_inner();
 
-        Ok(AsyncGrpcStreamWrapper::<
-            stream_write_message::FromClient,
-            stream_write_message::FromServer,
-        >::new(tx, response_stream)) // pass tx instead of mock_tx in case of proper solution
+        let wrapper = match stream_metrics {
+            Some(metrics) => AsyncGrpcStreamWrapper::new_with_metrics(tx, response_stream, metrics),
+            None => AsyncGrpcStreamWrapper::new(tx, response_stream),
+        };
+        Ok(wrapper)
     }
 
     // use for tests only, while reader not ready

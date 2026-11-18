@@ -3,11 +3,12 @@ mod mock_server;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ydb::{Client, ClientBuilder, Transaction, YdbResult, closure};
+use ydb::{Client, ClientBuilder, QueryExecutor, Transaction, YdbResult, closure};
 use ydb_grpc::ydb_proto::query::{ExecuteQueryResponsePart, TransactionMeta};
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
 use crate::mock_server::handler::{FromHandlerToService, Handler, Incoming, ReplySink};
+use crate::mock_server::query::parts::{empty_row_part, row_with_value};
 use crate::mock_server::query::{QUERY_TX_ID, QueryIncoming, QueryReply};
 use crate::mock_server::server::MockServer;
 
@@ -181,5 +182,97 @@ async fn no_retries_in_place_inside_tx() -> YdbResult<()> {
             "expected a single ExecuteQuery for {failure_code:?}"
         );
     }
+    Ok(())
+}
+
+/// Replies to `ExecuteQuery` with one row (`val=42`).
+struct OptionalRowHandler {
+    replies: ReplySink,
+}
+
+impl Handler for OptionalRowHandler {
+    fn set_channel(&mut self, tx: FromHandlerToService) {
+        self.replies.set_channel(tx);
+    }
+
+    fn handle(&self, incoming: Incoming) -> Option<Incoming> {
+        let Incoming::Query(QueryIncoming::ExecuteQuery(_, stream_id)) = incoming else {
+            return Some(incoming);
+        };
+        self.replies.send(QueryReply::ExecuteQuery {
+            stream_id,
+            part: row_with_value(42),
+        });
+        self.replies
+            .send(QueryReply::ExecuteQueryClose { stream_id });
+        None
+    }
+}
+
+/// Replies to `ExecuteQuery` with one empty result set.
+struct EmptyRowHandler {
+    replies: ReplySink,
+}
+
+impl Handler for EmptyRowHandler {
+    fn set_channel(&mut self, tx: FromHandlerToService) {
+        self.replies.set_channel(tx);
+    }
+
+    fn handle(&self, incoming: Incoming) -> Option<Incoming> {
+        let Incoming::Query(QueryIncoming::ExecuteQuery(_, stream_id)) = incoming else {
+            return Some(incoming);
+        };
+        self.replies.send(QueryReply::ExecuteQuery {
+            stream_id,
+            part: empty_row_part(),
+        });
+        self.replies
+            .send(QueryReply::ExecuteQueryClose { stream_id });
+        None
+    }
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn optional_row_into_future_maps_to_option() -> YdbResult<()> {
+    let handler = OptionalRowHandler {
+        replies: ReplySink::default(),
+    };
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+
+    let mut qc = client.query_client();
+    let row = QueryExecutor::query_row(&mut qc, "SELECT 42 AS val")
+        .optional()
+        .await?;
+
+    assert!(row.is_some(), "optional() must map a present row to Some");
+    let mut row = row.expect("checked Some");
+    let val: i64 = row.remove_field_by_name("val")?.try_into().unwrap();
+    assert_eq!(val, 42);
+
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn optional_row_into_future_returns_none_when_empty() -> YdbResult<()> {
+    let handler = EmptyRowHandler {
+        replies: ReplySink::default(),
+    };
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+
+    let mut qc = client.query_client();
+    let row = QueryExecutor::query_row(&mut qc, "SELECT 42 AS val")
+        .optional()
+        .await?;
+
+    assert!(
+        row.is_none(),
+        "optional() must map an empty result set to None"
+    );
+
     Ok(())
 }

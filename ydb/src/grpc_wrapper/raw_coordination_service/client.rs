@@ -4,7 +4,7 @@ use ydb_grpc::ydb_proto::coordination::v1::coordination_service_client::Coordina
 use ydb_grpc::ydb_proto::coordination::{SessionRequest, SessionResponse};
 
 use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
-use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
+use crate::grpc_wrapper::grpc_stream_wrapper::{AsyncGrpcStreamWrapper, GrpcStreamMetrics};
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
@@ -16,6 +16,7 @@ use super::drop_node::RawDropNodeRequest;
 
 pub(crate) struct RawCoordinationClient {
     service: CoordinationServiceClient<InterceptedChannel>,
+    stream_metrics: Option<GrpcStreamMetrics>,
 }
 
 impl WithGrpcMaxMessageSize for RawCoordinationClient {
@@ -26,12 +27,18 @@ impl WithGrpcMaxMessageSize for RawCoordinationClient {
             .max_encoding_message_size(bytes);
         self
     }
+
+    fn with_stream_metrics(mut self, metrics: GrpcStreamMetrics) -> Self {
+        self.stream_metrics = Some(metrics);
+        self
+    }
 }
 
 impl RawCoordinationClient {
     pub fn new(service: InterceptedChannel) -> Self {
         Self {
             service: CoordinationServiceClient::new(service),
+            stream_metrics: None,
         }
     }
 
@@ -50,11 +57,21 @@ impl RawCoordinationClient {
         };
         tx.send(mess)?;
 
-        let request_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
+        let stream_metrics = self.stream_metrics.as_ref().map(|metrics| {
+            metrics.bind(crate::grpc_wrapper::metrics_interceptor::COORDINATION_SESSION_PATH)
+        });
+        let request_stream = crate::grpc_wrapper::grpc_stream_wrapper::MetricsRequestStream::new(
+            rx,
+            stream_metrics.clone(),
+        );
         let stream_writer_result = self.service.session(request_stream).await;
         let response_stream = stream_writer_result?.into_inner();
 
-        Ok(AsyncGrpcStreamWrapper::<SessionRequest, SessionResponse>::new(tx, response_stream))
+        let wrapper = match stream_metrics {
+            Some(metrics) => AsyncGrpcStreamWrapper::new_with_metrics(tx, response_stream, metrics),
+            None => AsyncGrpcStreamWrapper::new(tx, response_stream),
+        };
+        Ok(wrapper)
     }
 
     #[instrument(name = "ydb.grpc.CreateNode", skip_all, fields(ydb.coordination.path = %req.path), err)]

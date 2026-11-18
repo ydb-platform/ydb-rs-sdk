@@ -1,10 +1,100 @@
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
+use futures_util::Stream;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::UnboundedReceiverStream;
+
+use crate::client_metrics::{MetricsRecorder, StreamDirection};
+use crate::grpc_wrapper::metrics_interceptor::parse_grpc_path;
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 
-use tokio::sync::mpsc;
+/// Unbound stream-message metrics context: the recorder plus the endpoint of the
+/// node the stream is attached to. Stamped into raw clients by the connection
+/// manager; bound to concrete `service`/`method` labels at stream creation.
+#[derive(Clone)]
+pub(crate) struct GrpcStreamMetrics {
+    recorder: Arc<dyn MetricsRecorder>,
+    endpoint: Arc<str>,
+}
+
+impl GrpcStreamMetrics {
+    pub(crate) fn new(recorder: Arc<dyn MetricsRecorder>, endpoint: Arc<str>) -> Self {
+        Self { recorder, endpoint }
+    }
+
+    /// Bind the context to the same canonical gRPC path used by request metrics.
+    pub(crate) fn bind(&self, path: &str) -> GrpcStreamMetricsBound {
+        let (service, method) = parse_grpc_path(path);
+        GrpcStreamMetricsBound {
+            recorder: Arc::clone(&self.recorder),
+            endpoint: Arc::clone(&self.endpoint),
+            service,
+            method,
+        }
+    }
+}
+
+/// Stream-message metrics bound to one endpoint and one streaming RPC.
+#[derive(Clone)]
+pub(crate) struct GrpcStreamMetricsBound {
+    recorder: Arc<dyn MetricsRecorder>,
+    endpoint: Arc<str>,
+    service: Arc<str>,
+    method: Arc<str>,
+}
+
+impl GrpcStreamMetricsBound {
+    fn message(&self, direction: StreamDirection) {
+        self.recorder
+            .grpc_stream_message(&self.endpoint, &self.service, &self.method, direction);
+    }
+}
+
+/// Counts messages when tonic polls them from the gRPC request stream.
+///
+/// This boundary includes the init message and messages submitted through
+/// cloned senders, without coupling the metric to any particular send helper.
+pub(crate) struct MetricsRequestStream<T> {
+    inner: UnboundedReceiverStream<T>,
+    metrics: Option<GrpcStreamMetricsBound>,
+}
+
+impl<T> MetricsRequestStream<T> {
+    pub(crate) fn new(
+        receiver: mpsc::UnboundedReceiver<T>,
+        metrics: Option<GrpcStreamMetricsBound>,
+    ) -> Self {
+        Self {
+            inner: UnboundedReceiverStream::new(receiver),
+            metrics,
+        }
+    }
+}
+
+impl<T> Stream for MetricsRequestStream<T> {
+    type Item = T;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let item = match Pin::new(&mut this.inner).poll_next(cx) {
+            Poll::Ready(item) => item,
+            Poll::Pending => return Poll::Pending,
+        };
+        if item.is_some()
+            && let Some(metrics) = &this.metrics
+        {
+            metrics.message(StreamDirection::Sent);
+        }
+        Poll::Ready(item)
+    }
+}
 
 pub(crate) struct AsyncGrpcStreamWrapper<RequestT, ResponseT> {
     from_client_grpc: mpsc::UnboundedSender<RequestT>,
     from_server_grpc: tonic::Streaming<ResponseT>,
+    metrics: Option<GrpcStreamMetricsBound>,
 }
 
 impl<RequestT, ResponseT> AsyncGrpcStreamWrapper<RequestT, ResponseT> {
@@ -15,6 +105,20 @@ impl<RequestT, ResponseT> AsyncGrpcStreamWrapper<RequestT, ResponseT> {
         Self {
             from_client_grpc: request_stream,
             from_server_grpc: response_stream,
+            metrics: None,
+        }
+    }
+
+    /// Like [`Self::new`], but counts messages received from the response stream.
+    pub(crate) fn new_with_metrics(
+        request_stream: mpsc::UnboundedSender<RequestT>,
+        response_stream: tonic::Streaming<ResponseT>,
+        metrics: GrpcStreamMetricsBound,
+    ) -> Self {
+        Self {
+            from_client_grpc: request_stream,
+            from_server_grpc: response_stream,
+            metrics: Some(metrics),
         }
     }
 
@@ -47,12 +151,112 @@ impl<RequestT, ResponseT> AsyncGrpcStreamWrapper<RequestT, ResponseT> {
             .await
             .map_err(RawError::from)?;
 
-        message
-            .ok_or_else(|| {
-                RawError::from(tonic::Status::unavailable(
-                    "Grpc stream was closed by sender",
-                ))
-            })?
-            .try_into()
+        let Some(message) = message else {
+            return Err(RawError::from(tonic::Status::unavailable(
+                "Grpc stream was closed by sender",
+            )));
+        };
+
+        if let Some(metrics) = &self.metrics {
+            metrics.message(StreamDirection::Received);
+        }
+        message.try_into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client_metrics::test_recorder::TestRecorder;
+    use ydb_grpc::ydb_proto::topic::stream_write_message;
+
+    fn metrics_with_recorder() -> (GrpcStreamMetrics, Arc<TestRecorder>) {
+        let recorder = Arc::new(TestRecorder::new());
+        let metrics = GrpcStreamMetrics::new(recorder.clone(), Arc::from("host:2135"));
+        (metrics, recorder)
+    }
+
+    #[tokio::test]
+    async fn request_stream_counts_init_and_all_senders_exactly_once() {
+        use futures_util::StreamExt;
+
+        let (metrics, recorder) = metrics_with_recorder();
+        let bound = metrics.bind(crate::grpc_wrapper::metrics_interceptor::TOPIC_STREAM_WRITE_PATH);
+        let (tx, rx) = mpsc::unbounded_channel::<stream_write_message::FromClient>();
+        tx.send(stream_write_message::FromClient::default())
+            .expect("init send must succeed");
+        let mut request_stream = MetricsRequestStream::new(rx, Some(bound.clone()));
+        let wrapper: AsyncGrpcStreamWrapper<
+            stream_write_message::FromClient,
+            stream_write_message::FromServer,
+        > = AsyncGrpcStreamWrapper::new_with_metrics(tx, empty_stream(), bound);
+
+        wrapper
+            .send_nowait(stream_write_message::FromClient::default())
+            .expect("wrapper send must succeed");
+        wrapper
+            .clone_sender()
+            .send(stream_write_message::FromClient::default())
+            .expect("cloned sender send must succeed");
+        assert_eq!(
+            recorder.counter_value("ydb_grpc_stream_messages_total"),
+            0,
+            "queueing a message must not count it before tonic polls the request stream"
+        );
+
+        for expected in 1..=3 {
+            request_stream
+                .next()
+                .await
+                .expect("three request messages must reach tonic");
+            assert_eq!(
+                recorder.counter_value("ydb_grpc_stream_messages_total"),
+                expected,
+                "init, wrapper, and cloned-sender messages must each count once"
+            );
+        }
+        assert_eq!(
+            recorder
+                .label_of_last("ydb_grpc_stream_messages_total", "direction")
+                .as_deref(),
+            Some("sent")
+        );
+        assert_eq!(
+            recorder
+                .label_of_last("ydb_grpc_stream_messages_total", "service")
+                .as_deref(),
+            Some("Ydb.Topic.V1.TopicService")
+        );
+        assert_eq!(
+            recorder
+                .label_of_last("ydb_grpc_stream_messages_total", "method")
+                .as_deref(),
+            Some("StreamWrite")
+        );
+        assert_eq!(
+            recorder
+                .label_of_last("ydb_grpc_stream_messages_total", "endpoint")
+                .as_deref(),
+            Some("host:2135")
+        );
+    }
+
+    /// Decoder yielding no messages: the receive path is covered by topic cycles.
+    struct NullDecoder;
+
+    impl tonic::codec::Decoder for NullDecoder {
+        type Item = stream_write_message::FromServer;
+        type Error = tonic::Status;
+
+        fn decode(
+            &mut self,
+            _src: &mut tonic::codec::DecodeBuf<'_>,
+        ) -> Result<Option<Self::Item>, Self::Error> {
+            Ok(None)
+        }
+    }
+
+    fn empty_stream() -> tonic::Streaming<stream_write_message::FromServer> {
+        tonic::codec::Streaming::new_empty(NullDecoder, tonic::body::Body::default())
     }
 }
