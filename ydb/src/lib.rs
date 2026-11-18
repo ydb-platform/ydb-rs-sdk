@@ -54,6 +54,7 @@ mod grpc;
 pub(crate) mod grpc_connection_manager;
 mod grpc_options;
 mod grpc_wrapper;
+mod http_client;
 mod load_balancer;
 mod pub_traits;
 pub(crate) mod query;
@@ -209,10 +210,12 @@ pub use table_requests::{
 // full enum pub types
 pub use waiter::Waiter;
 // full enum pub types
+#[cfg(feature = "service-account-credentials")]
+pub use crate::credentials::ServiceAccountCredentials;
 pub use crate::{
     credentials::{
         AccessTokenCredentials, AnonymousCredentials, CommandLineCredentials, FromEnvCredentials,
-        GCEMetadata, MetadataUrlCredentials, ServiceAccountCredentials, StaticCredentials,
+        GCEMetadata, MetadataUrlCredentials, StaticCredentials,
     },
     errors::{
         YdbError, YdbIssue, YdbIssueSeverity, YdbOrCustomerError, YdbResult,

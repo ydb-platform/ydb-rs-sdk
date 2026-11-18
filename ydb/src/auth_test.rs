@@ -8,7 +8,7 @@ use crate::{
     YdbResult,
     credentials::{
         AccessTokenCredentials, AnonymousCredentials, CommandLineCredentials, GCEMetadata,
-        MetadataUrlCredentials, ServiceAccountCredentials, StaticCredentials, unix_timestamp,
+        MetadataUrlCredentials, StaticCredentials, unix_timestamp,
     },
     pub_traits::Credentials,
     test_helpers::CONNECTION_STRING,
@@ -340,10 +340,73 @@ fn unix_timestamp_rejects_clock_before_the_epoch() {
     );
 }
 
+/// A throwaway RSA key, generated for this test and used nowhere else, so the
+/// signing path can run to completion instead of failing on the key.
+#[cfg(feature = "service-account-credentials")]
+const TEST_PRIVATE_KEY: &str = "\
+-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCso2/kc+4L/Ss5
+mQQV9F2p9131jjCHNd3bB3xHkOGt7052BECwEsxcB9qfsY5zB8oSxI3yRQ96jZKo
+rU1oVeBu43wtVOD85flslUaGRNqaIt2D6jXgCurlaQj7X7qtnKCf9B+BELaMRHj6
+F0SDe7FRiPXaqx3wkd+ObAcK2PBB87b2WyYFOTDtO62/DFuO+AyLwlRjOtaUSe2z
+9zKxxV306d5eIB0nOsZilt87DRW9bRuv3JCSOpUUW/rYmjASVkceG3SygxuXTlgr
+sDCu8pgc9zVZtLynnSRnw9H7WIx3yINpH6I9LLr4uvknG47qVd4wf4ik4AK+Kqzp
+GZZZbDX9AgMBAAECggEAAtoyCRMMeQPWNcqcN98K64bIwjvdLv622BDH/uHn69j3
+8bJt4/rYVLtUfPr3Olm2/v38XzP0Geqo5HYojabAx7qk3JYTn/On97rnqJd1CfYb
+6G5zZ9MGWoMuJzXhS09t+ZAtzRLnngQSAGyaymLxMdwSo9BCW5OT0mVg7TVaxg9a
++dAArk4/JAg9uCIRL7Iy2VhY/C3+I6Z6G6KlSY5DtZ4pcsnP/rdr5bfcoHl1mSxH
+D4aR/CaVYRf8p5pvwlTeYQ4HwEVYU2rrJWOB12mMIagiN2LvTcPD8iH9Gjs0oisa
+b0mZv48iJ9WJnidvmbe0Wuw21j+8fyTVR4jIoohAwQKBgQDuOQBP/5cxO9EGD94E
+1piwCiCslRDgHaF92h+0QxCY4+eOTDs6yigUpFGvdPSwpBCuD3MaqXTzdZhi7HYq
+xjHQOt9G1mqdHQxlCkHXlffnJmf4TwPJYidOiTjkLpPRkIwaLuoAG/KRXs/b5obE
+r1jtqXCQyzIWIbxZSkv+nqCWCQKBgQC5hYQ8RgEsEyicDu+cYSK1OdqaWKqYvB2S
+P2unzmwHxA9M6eBxgvG7yCmV1FrcM65FMoPFpnBYmBrYnEFMhBLlRLvw+vMv5ias
+yu89RA7xRP1Y9Wyya5pQLAK9hHHG95BveJ37gfPewc4FlpRgCipQ1x5wmc3OnQ/w
+zYFslBh9VQKBgQCXwE/mphaWEliw1+LCikFxwsHVro+1dKqvFQglOKOWAXg8OWtx
+o92saJBwiLxm2dyWRNk6HsCVZk/QlHkh/mc1EouxAF2iACMpKkOPJcVpxhltIEh1
+PMV1TgyjrtgTI1VcSI5fy23WFOOsXUl0eY7YtpsyYX5igtMMvjty03HQoQKBgGjp
+dTc0i1MmXm+qDpxLXfpIBjQEciy/LKXYkYOquvLFT7W6CH+IgjUj40hkdyFRZHqj
+L1tlXODs2zmlW1Pu2FSowvNqpn1u1G4gsJvf0edkkTRuTZK0QOaXjNEphcHzm809
+03E4MvXEeUI1viB1fyqKDB+3CmiN70bIoCkLsrGlAoGBAKDatV/ZFE/F4LWfZ2rF
+8V1GMIV26gHdxbk7QPURsgtWF6LkUqWu4aMeUW3qtfEBSldS4XQ2TcQNS/+VE9YN
+TQHygyP7e85dvWBSvC9yMlPv5bXYqGaccKmCzpV/HUam7wElbxpzUmzR9PeoP0Vh
+ymXXV/34RqqRRzkruEw7yotw
+-----END PRIVATE KEY-----";
+
+/// Signing has to reach the crypto backend, which the key-rejection test below
+/// never does: it fails while parsing the PEM, before a provider is consulted.
+///
+/// `jsonwebtoken` 11 resolves its provider from its own features and installs a
+/// placeholder that panics when neither `rust_crypto` nor `aws_lc_rs` is
+/// enabled, or when both are. A crate that selects no backend therefore builds,
+/// passes every existing test, and panics the first time a real service account
+/// signs. This is the test that notices.
+///
+/// `build_jwt` rather than `create_token`, so nothing but the signature is
+/// exercised: the exchange that follows needs a listening IAM endpoint.
+#[cfg(feature = "service-account-credentials")]
+#[test]
+fn service_account_credentials_sign_a_jwt_with_a_usable_private_key() {
+    use crate::credentials::ServiceAccountCredentials;
+
+    let cred = ServiceAccountCredentials::new("service-account-id", "key-id", TEST_PRIVATE_KEY);
+
+    let jwt = cred.build_jwt().expect("a usable key signs a JWT");
+
+    assert_eq!(
+        jwt.split('.').count(),
+        3,
+        "a signed JWT is header, claims and signature",
+    );
+}
+
 /// `build_jwt` computes `iat` before touching the key, so an unusable key
 /// still exercises that path and then fails on the key itself.
+#[cfg(feature = "service-account-credentials")]
 #[test]
 fn service_account_credentials_reject_unusable_private_key() {
+    use crate::credentials::ServiceAccountCredentials;
+
     let cred = ServiceAccountCredentials::new("service-account-id", "key-id", "not-a-pem-key");
 
     let err = cred

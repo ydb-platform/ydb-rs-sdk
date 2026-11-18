@@ -83,7 +83,7 @@ impl<D: Database + 'static> Workload for KvWorkload<D> {
                         if worker_ctx.is_cancelled() {
                             return;
                         }
-                        let id = rand::thread_rng().gen_range(0..prefill);
+                        let id = rand::rng().random_range(0..prefill);
                         let span = metrics.start(OPERATION_READ);
                         let result = tokio::time::timeout(read_timeout, db.read(id)).await;
                         match result {
