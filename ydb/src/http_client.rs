@@ -42,11 +42,10 @@ pub(crate) fn blocking_client() -> YdbResult<reqwest::blocking::Client> {
         .build()?)
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(feature = "rustls-ring", feature = "rustls-aws-lc-rs")))]
 mod tests {
     use super::*;
 
-    #[cfg(any(feature = "rustls-ring", feature = "rustls-aws-lc-rs"))]
     #[test]
     fn blocking_client_is_built_without_a_process_default_provider() {
         assert!(CryptoProvider::get_default().is_none());
