@@ -34,7 +34,10 @@ use crate::{
     },
 };
 
-use super::{controller::RequestController, lease::Lease};
+use super::{
+    controller::RequestController,
+    lease::{Lease, PendingAcquire},
+};
 
 #[derive(Clone)]
 struct MethodControllers {
@@ -291,14 +294,17 @@ impl CoordinationSession {
                 options.data,
             ))
             .await?;
+        // Armed until the reply arrives, so that a caller that stops waiting
+        // still releases what the server may grant after it gave up.
+        let pending = PendingAcquire::new(
+            self.method_controllers.release_semaphore.clone(),
+            name.to_string(),
+        );
         let response = self.recv_while_alive(&mut rx).await?;
         if response.acquired {
-            Ok(Lease::new(
-                self.method_controllers.release_semaphore.clone(),
-                name.to_string(),
-                self.cancellation_token.child_token(),
-            ))
+            Ok(pending.into_lease(self.cancellation_token.child_token()))
         } else {
+            pending.disarm();
             Err(YdbError::Custom("failed to acquire semaphore".to_string()))
         }
     }
