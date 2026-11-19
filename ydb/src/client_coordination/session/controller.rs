@@ -60,6 +60,23 @@ impl<Response: IdentifiedMessage> RequestController<Response> {
         Ok(rx)
     }
 
+    /// Sends a request whose reply nobody waits for.
+    ///
+    /// Synchronous, so that `Drop` can call it, and so that the request takes
+    /// its place on the stream before anything the caller sends next. No reply
+    /// channel is registered: the reply is dropped as one for an unknown id.
+    pub fn send_detached<Request: IdentifiedMessage + Into<session_request::Request>>(
+        &self,
+        mut req: Request,
+    ) -> YdbResult<()> {
+        req.set_id(self.last_req_id.fetch_add(1, atomic::Ordering::AcqRel));
+        self.messages_sender
+            .send(SessionRequest {
+                request: Some(req.into()),
+            })
+            .map_err(|_| YdbError::Custom("can't send".to_string()))
+    }
+
     pub async fn get_response(&self, response: Response) -> YdbResult<()> {
         let id = response.id();
         let waiter = self.active_requests.lock().await.remove(&id);
@@ -138,6 +155,20 @@ mod tests {
 
         assert!(controller.get_response(released(0)).await.is_ok());
         assert!(controller.active_requests.lock().await.is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn send_detached_registers_no_reply_channel() {
+        let (messages_tx, mut messages_rx) = mpsc::unbounded_channel();
+        let controller = RequestController::<RawReleaseSemaphoreResult>::new(messages_tx);
+
+        controller
+            .send_detached(RawReleaseSemaphoreRequest::new("semaphore".to_string()))
+            .unwrap();
+
+        assert!(messages_rx.try_recv().is_ok());
+        assert!(controller.active_requests.lock().await.is_empty());
+        assert!(controller.get_response(released(0)).await.is_ok());
     }
 
     #[tokio::test(flavor = "current_thread")]
