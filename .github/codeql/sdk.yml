@@ -1,0 +1,14 @@
+name: SDK security baseline
+
+queries:
+  - uses: security-extended
+
+paths:
+  - "ydb"
+  - "ydb-grpc-helpers"
+  - ".github/scripts"
+
+paths-ignore:
+  - "ydb-grpc/**"
+  - "**/tests/**"
+  - "**/*_test*.rs"
