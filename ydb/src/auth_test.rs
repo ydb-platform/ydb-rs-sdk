@@ -99,7 +99,7 @@ async fn wrong_password_test() {
 async fn password_client_test() -> YdbResult<()> {
     let client = create_password_client().await?;
     let mut row = client.query_client().query_row("SELECT 2").await?;
-    let two: i32 = row.remove_field(0)?.try_into()?;
+    let two: i32 = row.take(0)?;
 
     assert_eq!(two, 2);
     Ok(())

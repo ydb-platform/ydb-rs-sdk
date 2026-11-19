@@ -122,11 +122,10 @@ pub async fn read_series(qc: &mut QueryClient, prefix: &str) -> YdbResult<()> {
 
     while let Some(result_set) = stream.next_result_set().await? {
         for mut row in result_set {
-            let series_id: Option<Bytes> = row.remove_field_by_name("series_id")?.try_into()?;
+            let series_id: Option<Bytes> = row.take("series_id")?;
             let series_bytes: Vec<u8> = series_id.expect("series_id present").into();
-            let title: Option<String> = row.remove_field_by_name("title")?.try_into()?;
-            let release_date: Option<SystemTime> =
-                row.remove_field_by_name("release_date")?.try_into()?;
+            let title: Option<String> = row.take("title")?;
+            let release_date: Option<SystemTime> = row.take("release_date")?;
             println!(
                 "id: {}, title: {}, release: {:?}",
                 format_id(&series_bytes),

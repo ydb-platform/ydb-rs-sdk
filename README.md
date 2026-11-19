@@ -41,7 +41,7 @@ async fn main() -> YdbResult<()> {
 
     // one-shot: retries internally, no closure for a single statement
     let mut row = qc.query_row("SELECT 1 + 1 AS sum").await?;
-    let sum: i32 = row.remove_field_by_name("sum")?.try_into()?;
+    let sum: i32 = row.take("sum")?;
 
     println!("sum: {sum}");
     Ok(())
@@ -87,7 +87,7 @@ async fn main() -> YdbResult<()> {
     // or: .params(ydb_params!("$id" => 2_i64, "$val" => "world"))
 
     let mut row = qc.query_row("SELECT COUNT(*) AS cnt FROM test").await?;
-    let cnt: i64 = row.remove_field_by_name("cnt")?.try_into()?;
+    let cnt: i64 = row.take("cnt")?;
     println!("cnt = {cnt}");
 
     Ok(())

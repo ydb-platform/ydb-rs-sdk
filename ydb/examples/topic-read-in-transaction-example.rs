@@ -452,10 +452,10 @@ async fn main() -> YdbResult<()> {
             let mut rows = Vec::new();
             if let Some(result_set) = stream.next_result_set().await? {
                 for mut row in result_set {
-                    let topic: String = row.remove_field_by_name("topic")?.try_into()?;
-                    let partition: i64 = row.remove_field_by_name("partition")?.try_into()?;
-                    let offset: i64 = row.remove_field_by_name("offset")?.try_into()?;
-                    let body: Option<String> = row.remove_field_by_name("body")?.try_into()?;
+                    let topic: String = row.take("topic")?;
+                    let partition: i64 = row.take("partition")?;
+                    let offset: i64 = row.take("offset")?;
+                    let body: Option<String> = row.take("body")?;
 
                     rows.push(TableRow {
                         topic,

@@ -59,7 +59,7 @@ async fn copy_table() -> YdbResult<()> {
         )
         .await?;
 
-    let field = res.rows().next().unwrap().remove_field_by_name("vInt64")?;
+    let field = res.rows().next().unwrap().take::<Value, _>("vInt64")?;
     let v_int64 = match field {
         Value::Int64(v) => v,
         Value::Optional(opt) => match opt.value {
@@ -128,7 +128,7 @@ async fn copy_tables() -> YdbResult<()> {
         )
         .await?;
 
-    let field = res.rows().next().unwrap().remove_field_by_name("vInt64")?;
+    let field = res.rows().next().unwrap().take::<Value, _>("vInt64")?;
     let v_int64 = match field {
         Value::Int64(v) => v,
         Value::Optional(opt) => match opt.value {
@@ -227,8 +227,8 @@ async fn read_rows() -> YdbResult<()> {
         .await;
 
     for (mut row, (first, second)) in all_columns.unwrap().rows().zip(ydb_values.iter()) {
-        assert_eq!(&row.remove_field_by_name("first").unwrap(), first);
-        assert_eq!(&row.remove_field_by_name("second").unwrap(), second);
+        assert_eq!(&row.take::<Value, _>("first").unwrap(), first);
+        assert_eq!(&row.take::<Value, _>("second").unwrap(), second);
     }
 
     // Basic reversed
@@ -240,8 +240,8 @@ async fn read_rows() -> YdbResult<()> {
         )
         .await;
     for (mut row, (first, second)) in all_columns_rev.unwrap().rows().zip(ydb_values.iter().rev()) {
-        assert_eq!(&row.remove_field_by_name("first").unwrap(), first);
-        assert_eq!(&row.remove_field_by_name("second").unwrap(), second);
+        assert_eq!(&row.take::<Value, _>("first").unwrap(), first);
+        assert_eq!(&row.take::<Value, _>("second").unwrap(), second);
     }
 
     // Partial
@@ -257,9 +257,9 @@ async fn read_rows() -> YdbResult<()> {
         .unwrap()
         .rows()
         .map(|mut t| {
-            assert!(t.remove_field_by_name("second").is_err());
-            assert!(t.remove_field_by_name("third").is_err());
-            t.remove_field_by_name("first").unwrap()
+            assert!(t.take::<Value, _>("second").is_err());
+            assert!(t.take::<Value, _>("third").is_err());
+            t.take::<Value, _>("first").unwrap()
         })
         .collect_vec();
 
@@ -330,8 +330,7 @@ async fn bulk_upsert() -> YdbResult<()> {
     let read_rows_id: YdbResult<Vec<i64>> = result_set
         .rows()
         .map(|mut row| {
-            let val = row.remove_field_by_name("id")?;
-            let res: i64 = val.try_into()?;
+            let res: i64 = row.take("id")?;
             Ok(res)
         })
         .collect();
@@ -463,7 +462,7 @@ async fn bulk_upsert_rpc() -> YdbResult<()> {
 
     let mut vals = Vec::new();
     for mut row in result.rows() {
-        vals.push(row.remove_field_by_name("val")?);
+        vals.push(row.take::<Value, _>("val")?);
     }
     assert!(vals.contains(&Value::Text("one".into())));
     assert!(vals.contains(&Value::Text("two".into())));

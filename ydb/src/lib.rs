@@ -19,7 +19,7 @@
 //!     .query_client()
 //!     .query_row("SELECT 1 + 1 AS sum")
 //!     .await?;
-//!  let sum: i32 = row.remove_field_by_name("sum")?.try_into()?;
+//!  let sum: i32 = row.take("sum")?;
 //!
 //!  // it will print "sum: 2"
 //!  println!("sum: {}", sum);
@@ -201,7 +201,7 @@ pub use discovery::{Discovery, DiscoveryState, StaticDiscovery};
 // full enum pub types
 pub use query::Query;
 // full enum pub types
-pub use result::{ResultSet, ResultSetRowsIter, Row};
+pub use result::{ColumnIndex, ResultSet, ResultSetRowsIter, Row};
 pub use table_requests::{
     AlterTableRequest, CreateTableRequest, DropTableRequest, NamedPolicyDescription,
     ReadRowsRequest, TableColumn, TableOptionsDescription,

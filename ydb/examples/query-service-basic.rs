@@ -13,7 +13,7 @@ struct CounterRow {
 impl FromYdbRow for CounterRow {
     fn from_row(mut row: Row) -> YdbResult<Self> {
         Ok(Self {
-            cnt: row.remove_field_by_name("cnt")?.try_into()?,
+            cnt: row.take("cnt")?,
         })
     }
 }
@@ -45,7 +45,7 @@ async fn main() -> YdbResult<()> {
 
     // 3. Exactly one row: 0 rows -> Err(NoRows), >1 -> error.
     let mut row = qc.query_row("SELECT COUNT(*) AS cnt FROM test").await?;
-    let cnt: i64 = row.remove_field_by_name("cnt")?.try_into()?;
+    let cnt: i64 = row.take("cnt")?;
     println!("cnt = {cnt}");
 
     // 4. Optional row — the sqlx `fetch_optional` analogue.

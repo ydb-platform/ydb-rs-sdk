@@ -71,8 +71,8 @@ SELECT * FROM AS_TABLE($list)
     let mut rows = result_set.rows();
 
     let row_to_val = |mut row: ydb::Row| -> YdbResult<(i64, String)> {
-        let id: Option<i64> = row.remove_field_by_name("id")?.try_into()?;
-        let val: Option<String> = row.remove_field_by_name("val")?.try_into()?;
+        let id: Option<i64> = row.take("id")?;
+        let val: Option<String> = row.take("val")?;
 
         Ok((id.unwrap(), val.unwrap()))
     };

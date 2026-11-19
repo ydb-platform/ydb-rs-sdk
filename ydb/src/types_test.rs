@@ -82,10 +82,8 @@ async fn test_decimal() -> YdbResult<()> {
                 r#"select CAST("-1233333333333333333333345.34" AS Decimal(28, 2)) as db_value"#,
             )
             .await?;
-        row.remove_field_by_name("db_value")?
-    }
-    .try_into()
-    .unwrap();
+        row.take("db_value")?
+    };
     let test_value = Some(
         "-1233333333333333333333345.34"
             .parse::<decimal_rs::Decimal>()
@@ -802,7 +800,7 @@ async fn check_type_roundtrip(client: &Client, case: &TypeCase) -> YdbResult<()>
             .query_row(q)
             .params(ydb_params!("$val" => v))
             .await?;
-        row.remove_field_by_name("db_result")?
+        row.take::<Value, _>("db_result")?
     };
     let inner_passthrough = unwrap_optional(recv_passthrough, &case.yql_type, &case.text)?;
     assert!(
@@ -822,7 +820,7 @@ async fn check_type_roundtrip(client: &Client, case: &TypeCase) -> YdbResult<()>
             .query_row(&q2)
             .params(ydb_params!("$val" => v))
             .await?;
-        let v: Option<String> = row.remove_field_by_name("db_result")?.try_into()?;
+        let v: Option<String> = row.take("db_result")?;
         (v,)
     };
     assert_eq!(
@@ -840,7 +838,7 @@ async fn check_type_roundtrip(client: &Client, case: &TypeCase) -> YdbResult<()>
             .query_row(&q3)
             .params(ydb_params!("$val" => s))
             .await?;
-        row.remove_field_by_name("db_result")?
+        row.take::<Value, _>("db_result")?
     };
     let inner_parsed = unwrap_optional(recv_parsed, &case.yql_type, &case.text)?;
     assert!(
