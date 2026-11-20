@@ -1,11 +1,11 @@
 use crate::{GrpcOptions, YdbError, YdbResult};
-use derivative::Derivative;
 use futures_util::FutureExt;
 use futures_util::stream::FuturesUnordered;
 use http::Uri;
 use http::uri::{Authority, Scheme};
 use itertools::Either;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fmt::{Debug, Formatter};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::task::Poll;
@@ -92,16 +92,22 @@ pub(crate) struct RacyRoundRobin {
     state: tokio::sync::Mutex<RacyRoundRobinState>,
 }
 
-#[derive(Derivative)]
-#[derivative(Debug)]
 struct RacyRoundRobinState {
     addrs: HashSet<IpAddr>,
 
-    #[derivative(Debug = "ignore")]
     connections: VecDeque<ConnectionTask>,
     first_connection: ReadyConnection,
-    #[derivative(Debug = "ignore")]
     tried_connections: VecDeque<ConnectionTask>,
+}
+
+impl Debug for RacyRoundRobinState {
+    // The connection queues are skipped: `ConnectionTask` is not `Debug`.
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RacyRoundRobinState")
+            .field("addrs", &self.addrs)
+            .field("first_connection", &self.first_connection)
+            .finish()
+    }
 }
 
 type ConnectionTask = Either<PendingConnection, ReadyConnection>;
@@ -379,5 +385,47 @@ mod tests {
         assert_eq!(ip_addr_to_authority(addr, None)?, "[2001:db8::1]");
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod racy_round_robin_state_tests {
+    use super::*;
+
+    /// `Debug` is hand-written because `ConnectionTask` is not `Debug`. Pin the
+    /// fields it reports, and that the two queues stay out of the output.
+    #[tokio::test]
+    async fn debug_reports_addrs_without_connection_queues() {
+        let addr: IpAddr = "127.0.0.1".parse().expect("valid address");
+        // `connect_lazy` does not touch the network.
+        let channel = Endpoint::from_static("http://127.0.0.1:2136").connect_lazy();
+
+        let state = RacyRoundRobinState {
+            addrs: HashSet::from([addr]),
+            connections: VecDeque::new(),
+            first_connection: (channel, addr),
+            tried_connections: VecDeque::new(),
+        };
+
+        let rendered = format!("{state:?}");
+
+        assert!(
+            rendered.starts_with("RacyRoundRobinState {"),
+            "unexpected shape: {rendered}"
+        );
+        assert!(rendered.contains("addrs"), "addrs missing: {rendered}");
+        assert!(
+            rendered.contains("127.0.0.1"),
+            "address missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("first_connection"),
+            "first_connection missing: {rendered}"
+        );
+
+        assert!(
+            !rendered.contains("tried_connections"),
+            "tried_connections must stay out of Debug: {rendered}"
+        );
     }
 }
