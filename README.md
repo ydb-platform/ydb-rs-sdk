@@ -128,6 +128,20 @@ Notes:
 - `table_client` remains available for legacy code; new code should prefer `query_client`.
 - Full before/after: compare [`basic-select-upsert.rs`](ydb/examples/basic-select-upsert.rs) (table) with [`query-service-basic.rs`](ydb/examples/query-service-basic.rs) (query).
 
+### Topic counters
+
+Install a `metrics` recorder before opening a topic writer or reader. Counters are registered when the first writer or reader is opened for the driver. All five use the `driver_name` label (default: `main`).
+
+| Counter | What it counts |
+| --- | --- |
+| `ydb.topic.writer.sending.messages` | Messages accepted into the writer queue. Resending a queued message adds nothing. |
+| `ydb.topic.writer.sending.bytes` | Original payload bytes of those messages, before compression. |
+| `ydb.topic.reader.received.bytes` | Bytes reported by the server in each read response, even if decoding fails. |
+| `ydb.topic.reader.received.messages` | Decoded messages added to active partition buffers. Redelivered messages count again. |
+| `ydb.topic.reader.delivered.messages` | Messages returned to the application. Transactional reads count after offset registration succeeds. |
+
+For Prometheus setup, including migration from `metrics-prometheus 0.11.2`, see [Exporting topic counters](ydb/README.md#exporting-topic-counters).
+
 ## Tests
 
 Integration tests, with dependency from real YDB database marked as ignored.

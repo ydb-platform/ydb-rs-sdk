@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use crate::client_common::TokenCache;
+use crate::client_metrics::names::TopicReaderMetrics;
 use crate::client_query::Transaction;
 use crate::client_topic::compression::Executor;
 use crate::client_topic::topicreader::ids::{PartitionId, PartitionSessionId};
@@ -49,6 +50,7 @@ impl TopicReader {
         manager: GrpcConnectionManager,
         token_cache: TokenCache,
         compression_executor: Arc<dyn Executor>,
+        metrics: TopicReaderMetrics,
     ) -> YdbResult<Self> {
         let cancellation = CancellationToken::new();
         let ReconnectorTask {
@@ -62,6 +64,7 @@ impl TopicReader {
             compression_executor,
             cancellation,
             new_reader_id(),
+            metrics,
         )
         .run();
 
@@ -76,7 +79,16 @@ impl TopicReader {
 
     #[instrument(name = "ydb.TopicReader.ReadBatch", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn read_batch(&mut self) -> YdbResult<TopicReaderBatch> {
-        self.read_batch_inner().await
+        let batch = self.read_batch_inner().await?;
+        self.record_delivery(&batch);
+        Ok(batch)
+    }
+
+    pub(super) fn record_delivery(&self, batch: &TopicReaderBatch) {
+        self.runtime
+            .metrics()
+            .delivered_messages
+            .increment(batch.messages.len() as u64);
     }
 
     pub(super) async fn read_batch_inner(&mut self) -> YdbResult<TopicReaderBatch> {
@@ -93,6 +105,7 @@ impl TopicReader {
         let batch = self.read_batch_inner().await?;
         self.update_offsets_in_transaction(&batch, session_id, transaction_id)
             .await?;
+        self.record_delivery(&batch);
         Ok(batch)
     }
 

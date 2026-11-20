@@ -4,6 +4,7 @@ use super::topicwriter::writer_tx_options::{TopicWriterTxOptions, TopicWriterTxO
 use crate::YdbError::InternalError;
 use crate::client::TimeoutSettings;
 use crate::client_common::TokenCache;
+use crate::client_metrics::names::TopicMetrics;
 use crate::client_query::Transaction;
 use crate::client_topic::list_types::{AlterConsumer, Consumer, MeteringMode};
 use crate::client_topic::topicreader::reader::{TopicReader, TopicSelectors};
@@ -124,6 +125,7 @@ pub struct TopicClient {
     connection_manager: GrpcConnectionManager,
     token_cache: TokenCache,
     executor: Arc<dyn Executor>,
+    metrics: Arc<TopicMetrics>,
 }
 
 impl TopicClient {
@@ -131,12 +133,14 @@ impl TopicClient {
         connection_manager: GrpcConnectionManager,
         token_cache: TokenCache,
         executor: Arc<dyn Executor>,
+        metrics: Arc<TopicMetrics>,
     ) -> Self {
         Self {
             timeouts: TimeoutSettings::default(),
             connection_manager,
             token_cache,
             executor,
+            metrics,
         }
     }
 
@@ -228,6 +232,7 @@ impl TopicClient {
             self.connection_manager.clone(),
             self.token_cache.clone(),
             self.executor.clone(),
+            self.metrics.reader(),
         )
         .await
     }
@@ -242,6 +247,7 @@ impl TopicClient {
             self.connection_manager.clone(),
             self.token_cache.clone(),
             self.executor.clone(),
+            self.metrics.reader(),
         )
         .await
     }
@@ -255,6 +261,7 @@ impl TopicClient {
             writer_options,
             self.connection_manager.clone(),
             self.executor.clone(),
+            self.metrics.writer(),
         )
         .await
     }
@@ -279,6 +286,7 @@ impl TopicClient {
             writer_tx_options,
             self.connection_manager.clone(),
             self.executor.clone(),
+            self.metrics.writer(),
             tx,
         )
         .await
@@ -290,6 +298,7 @@ impl TopicClient {
             TopicWriterOptions::builder().topic_path(path).build(),
             self.connection_manager.clone(),
             self.executor.clone(),
+            self.metrics.writer(),
         )
         .await
     }

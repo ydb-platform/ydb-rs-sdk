@@ -5,6 +5,9 @@ use tokio::sync::{Mutex, Notify, RwLock, oneshot};
 use tokio::time::{Instant, sleep_until};
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
+#[cfg(test)]
+use crate::client_metrics::names::MetricsNames;
+use crate::client_metrics::names::TopicWriterMetrics;
 use crate::client_topic::topicwriter::capacity_limiter::{
     AdmittedMessage, CapacityLimiter, CapacityPermit,
 };
@@ -24,6 +27,7 @@ pub(crate) struct Queue {
     inner: Arc<Mutex<QueueInner>>,
     capacity_limiter: CapacityLimiter,
     auto_flush: AutoFlushSettings,
+    metrics: TopicWriterMetrics,
 
     new_message_added: Arc<Notify>,
     flush_requested: Arc<Notify>,
@@ -36,12 +40,14 @@ impl Queue {
         status_validator: MessageWriteStatusValidator,
         auto_seq_no: bool,
         flow_control: WriterFlowControl,
+        metrics: TopicWriterMetrics,
     ) -> YdbResult<Self> {
         let inflight = flow_control.inflight();
         Ok(Self {
             inner: Arc::new(Mutex::new(QueueInner::new(status_validator, auto_seq_no))),
             capacity_limiter: CapacityLimiter::new(inflight.messages(), inflight.bytes())?,
             auto_flush: flow_control.auto_flush(),
+            metrics,
             new_message_added: Arc::new(Notify::new()),
             flush_requested: Arc::new(Notify::new()),
             last_acknowledged_seq_no: Arc::new(RwLock::new(None)),
@@ -65,6 +71,7 @@ impl Queue {
         message: TopicWriterMessage,
         ack_sender: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
     ) -> YdbResult<()> {
+        let payload_bytes = message.data.len() as u64;
         let admission = self.capacity_limiter.admit(message);
         tokio::pin!(admission);
         let (message, was_blocked) = match admission.as_mut().now_or_never() {
@@ -81,6 +88,9 @@ impl Queue {
             // Send this message while later capacity waiters are still blocked.
             self.flush_requested.notify_one();
         }
+        drop(inner);
+        self.metrics.sending_messages.increment(1);
+        self.metrics.sending_bytes.increment(payload_bytes);
         Ok(())
     }
 
@@ -222,6 +232,7 @@ impl Queue {
                 auto_flush_bytes,
                 auto_flush_interval,
             ),
+            MetricsNames::default().topics.writer(),
         )
         .unwrap()
     }
@@ -333,6 +344,7 @@ impl QueueInner {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
 
     use futures_util::FutureExt;
@@ -341,6 +353,21 @@ mod tests {
     use super::*;
     use crate::client_topic::topicwriter::message_write_status::expect_transactional_write_status;
     use crate::client_topic::topicwriter::test_helpers::{write_ack, writer_flow_control};
+
+    fn observe_sending(mut queue: Queue) -> (Queue, impl Fn() -> (u64, u64)) {
+        let messages = Arc::new(AtomicU64::new(0));
+        let bytes = Arc::new(AtomicU64::new(0));
+        queue.metrics = TopicWriterMetrics {
+            sending_messages: metrics::Counter::from_arc(messages.clone()),
+            sending_bytes: metrics::Counter::from_arc(bytes.clone()),
+        };
+        (queue, move || {
+            (
+                messages.load(Ordering::Relaxed),
+                bytes.load(Ordering::Relaxed),
+            )
+        })
+    }
 
     fn create_message(seq_no: i64, data: Vec<u8>) -> TopicWriterMessage {
         TopicWriterMessage::builder()
@@ -376,6 +403,39 @@ mod tests {
         let messages = q.get_messages_to_send().await;
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].seq_no, 2);
+    }
+
+    #[tokio::test]
+    async fn sending_metrics_only_count_accepted_payloads() {
+        let (q, totals) =
+            observe_sending(Queue::with_flow_control(false, 1, 3, 1, 3, Duration::ZERO));
+
+        let err = q
+            .add_message(TopicWriterMessage::new([42]), None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("empty message seq_no"));
+        assert_eq!(totals(), (0, 0));
+
+        // An oversized payload is charged only the byte limit, but contributes its full length.
+        q.add_message(create_message(1, vec![0; 5]), None)
+            .await
+            .unwrap();
+        assert_eq!(totals(), (1, 5));
+        assert!(
+            q.add_message(create_message(2, vec![42]), None)
+                .now_or_never()
+                .is_none()
+        );
+        assert_eq!(totals(), (1, 5));
+
+        let sent = q.get_messages_to_send().await;
+        assert_eq!(sent[0].seq_no, 1);
+        q.acknowledge_message(write_ack(1)).await.unwrap();
+        q.add_message(create_message(2, vec![]), None)
+            .await
+            .unwrap();
+        assert_eq!(totals(), (2, 5));
     }
 
     #[tokio::test]
@@ -659,6 +719,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reset_progress_does_not_restore_acknowledged_messages() {
+        let (q, totals) = observe_sending(Queue::new());
+        q.add_message(create_message(1, vec![0; 3]), None)
+            .await
+            .unwrap();
+        assert_eq!(totals(), (1, 3));
+        q.add_message(create_message(2, vec![0; 5]), None)
+            .await
+            .unwrap();
+        assert_eq!(totals(), (2, 8));
+        let first_message_batch = q.get_messages_to_send().await;
+        assert_eq!(first_message_batch.len(), 2);
+        assert_eq!(first_message_batch[0].seq_no, 1);
+        assert_eq!(first_message_batch[1].seq_no, 2);
+
+        q.acknowledge_message(write_ack(1)).await.unwrap();
+        q.reset_progress().await;
+        let second_message_batch = q.get_messages_to_send().await;
+        assert_eq!(second_message_batch.len(), 1);
+        assert_eq!(second_message_batch[0].seq_no, 2);
+        assert_eq!(totals(), (2, 8));
+        q.acknowledge_message(write_ack(2)).await.unwrap();
+        q.reset_progress().await;
+
+        let third_message_batch = q.get_messages_to_send().await;
+        assert_eq!(third_message_batch.len(), 0);
+        assert_eq!(totals(), (2, 8));
+    }
+
+    #[tokio::test]
     async fn reset_progress_restores_sent_messages_to_pending() {
         let q = Queue::new();
         q.add_message(create_message(1, vec![]), None)
@@ -740,6 +830,7 @@ mod tests {
                 TEST_INFLIGHT_BYTES,
                 Duration::from_millis(20),
             ),
+            MetricsNames::default().topics.writer(),
         )
         .unwrap();
         q.add_message(create_message(1, vec![]), None)
@@ -766,6 +857,7 @@ mod tests {
                     TEST_INFLIGHT_BYTES,
                     Duration::from_millis(20),
                 ),
+                MetricsNames::default().topics.writer(),
             )
             .unwrap(),
         );

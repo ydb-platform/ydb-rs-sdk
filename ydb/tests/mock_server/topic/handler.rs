@@ -1,7 +1,7 @@
 use ydb_grpc::ydb_proto::topic;
 use ydb_grpc::ydb_proto::topic::{stream_read_message, stream_write_message};
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum TopicIncoming {
     StreamRead {
         stream_id: u64,
@@ -12,7 +12,12 @@ pub enum TopicIncoming {
         msg: stream_write_message::from_client::ClientMessage,
     },
     CommitOffset(topic::CommitOffsetRequest),
-    UpdateOffsetsInTransaction(topic::UpdateOffsetsInTransactionRequest),
+    UpdateOffsetsInTransaction(
+        topic::UpdateOffsetsInTransactionRequest,
+        tokio::sync::oneshot::Sender<
+            Result<tonic::Response<topic::UpdateOffsetsInTransactionResponse>, tonic::Status>,
+        >,
+    ),
     CreateTopic(topic::CreateTopicRequest),
     DescribeTopic(topic::DescribeTopicRequest),
     DescribeConsumer(topic::DescribeConsumerRequest),
@@ -31,7 +36,6 @@ pub enum TopicReply {
         msg: stream_write_message::FromServer,
     },
     CommitOffset(topic::CommitOffsetResponse),
-    UpdateOffsetsInTransaction(topic::UpdateOffsetsInTransactionResponse),
     CreateTopic(topic::CreateTopicResponse),
     DescribeTopic(topic::DescribeTopicResponse),
     DescribeConsumer(topic::DescribeConsumerResponse),

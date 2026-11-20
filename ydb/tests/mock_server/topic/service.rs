@@ -156,9 +156,17 @@ impl TopicService for MockTopicService {
 
     async fn update_offsets_in_transaction(
         &self,
-        _request: tonic::Request<topic::UpdateOffsetsInTransactionRequest>,
+        request: tonic::Request<topic::UpdateOffsetsInTransactionRequest>,
     ) -> Result<tonic::Response<topic::UpdateOffsetsInTransactionResponse>, tonic::Status> {
-        unimplemented!()
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let _ = self
+            .to_server
+            .send(Incoming::Topic(TopicIncoming::UpdateOffsetsInTransaction(
+                request.into_inner(),
+                tx,
+            )));
+        rx.await
+            .unwrap_or_else(|_| Err(tonic::Status::internal("mock handler dropped oneshot")))
     }
 
     async fn create_topic(

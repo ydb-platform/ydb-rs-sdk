@@ -73,6 +73,12 @@ pub fn default_replies(msg: TopicIncoming) -> Vec<TopicReply> {
             msg: ReadFromClient::UpdateTokenRequest(_),
         } => vec![update_token_response(stream_id)],
 
+        TopicIncoming::UpdateOffsetsInTransaction(_, reply_tx) => {
+            let _ = reply_tx.send(Ok(tonic::Response::new(
+                super::builders::update_offsets_in_transaction_response(),
+            )));
+            vec![]
+        }
         _ => vec![],
     }
 }

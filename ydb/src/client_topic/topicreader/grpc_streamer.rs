@@ -1,5 +1,6 @@
 use std::convert::Infallible;
 
+use metrics::Counter;
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
@@ -52,7 +53,7 @@ impl GrpcStreamer {
         })
     }
 
-    pub(super) async fn run(self) -> YdbResult<()> {
+    pub(super) async fn run(self, received_bytes: Counter) -> YdbResult<()> {
         let Self {
             stream,
             cancellation,
@@ -68,6 +69,7 @@ impl GrpcStreamer {
         tasks.spawn(receive_loop(
             stream,
             decompression_input_tx,
+            received_bytes,
             stream_cancellation.clone(),
         ));
 
@@ -117,6 +119,7 @@ async fn grpc_connect(
 async fn receive_loop(
     stream: GrpcStream,
     decompression_input_tx: mpsc::UnboundedSender<RawFromServer>,
+    received_bytes: Counter,
     cancellation: CancellationToken,
 ) -> YdbResult<()> {
     select! {
@@ -124,7 +127,7 @@ async fn receive_loop(
             debug!("topic reader grpc receive loop cancelled, stopping");
             Ok(())
         }
-        result = receive_messages(stream, decompression_input_tx) => {
+        result = receive_messages(stream, decompression_input_tx, received_bytes) => {
             let Err(err) = result;
             Err(err)
         }
@@ -134,9 +137,15 @@ async fn receive_loop(
 async fn receive_messages(
     mut stream: GrpcStream,
     decompression_input_tx: mpsc::UnboundedSender<RawFromServer>,
+    received_bytes: Counter,
 ) -> YdbResult<Infallible> {
     loop {
         let message = stream.receive::<RawFromServer>().await?;
+        if let RawFromServer::ReadResponse(response) = &message
+            && let Ok(bytes) = u64::try_from(response.bytes_size)
+        {
+            received_bytes.increment(bytes);
+        }
         decompression_input_tx.send(message).map_err(|_| {
             YdbError::Transport("topic reader grpc -> decompressor channel closed".to_string())
         })?;
