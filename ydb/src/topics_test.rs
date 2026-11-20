@@ -3,7 +3,7 @@ use std::time::{Duration, Instant, SystemTime};
 use tokio::time::timeout;
 use tracing_test::traced_test;
 
-use crate::client_topic::client::DescribeConsumerOptionsBuilder;
+use crate::client_topic::client::{CommitOffsetOptionsBuilder, DescribeConsumerOptionsBuilder};
 use crate::client_topic::list_types::ConsumerBuilder;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use crate::test_helpers::CONNECTION_STRING;
@@ -1182,6 +1182,147 @@ async fn topic_writer_reconnects() -> YdbResult<()> {
         expected_index, MSG_COUNT,
         "timed out or truncated read: got {expected_index} of {MSG_COUNT} messages"
     );
+
+    Ok(())
+}
+
+/// `CommitOffset` is a unary RPC, independent of any read session: it moves a
+/// consumer's committed position without opening a stream. Verified through
+/// `DescribeConsumer`, which reports the committed offset per partition.
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn commit_offset_test() -> YdbResult<()> {
+    let client = create_client().await?;
+    let database_path = client.database();
+    let topic_name = "commit_offset_test_topic".to_string();
+    let topic_path = format!("{database_path}/{topic_name}");
+    let consumer_name = "commit-offset-consumer".to_string();
+    let producer_id = "commit-offset-producer".to_string();
+
+    let mut topic_client = client.topic_client();
+    let _ = topic_client.drop_topic(topic_path.clone()).await; // ignoring error
+
+    topic_client
+        .create_topic(
+            topic_path.clone(),
+            CreateTopicOptionsBuilder::default()
+                .consumers(vec![
+                    ConsumerBuilder::default()
+                        .name(consumer_name.clone())
+                        .build()?,
+                ])
+                .build()?,
+        )
+        .await?;
+
+    // Write a few messages so there is something to commit past.
+    let writer = topic_client
+        .create_writer_with_params(
+            TopicWriterOptions::builder()
+                .topic_path(topic_path.clone())
+                .producer_id(producer_id)
+                .build(),
+        )
+        .await?;
+    for i in 0..3 {
+        writer
+            .write(
+                TopicWriterMessage::builder()
+                    .data(format!("message-{i}").into_bytes())
+                    .build(),
+            )
+            .await?;
+    }
+    writer.flush().await?;
+    writer.stop().await?;
+
+    let committed_offset = |description: &crate::ConsumerDescription| -> i64 {
+        description
+            .partitions
+            .first()
+            .map(|p| p.consumer_stats.committed_offset)
+            .unwrap_or_default()
+    };
+
+    let before = topic_client
+        .describe_consumer(
+            topic_path.clone(),
+            consumer_name.clone(),
+            DescribeConsumerOptionsBuilder::default()
+                .include_stats(true)
+                .build()?,
+        )
+        .await?;
+    assert_eq!(committed_offset(&before), 0, "consumer starts uncommitted");
+
+    // No read session is involved: this is the whole point of the unary call.
+    topic_client
+        .commit_offset(
+            topic_path.clone(),
+            0,
+            consumer_name.clone(),
+            2,
+            CommitOffsetOptionsBuilder::default().build()?,
+        )
+        .await?;
+
+    let after = topic_client
+        .describe_consumer(
+            topic_path.clone(),
+            consumer_name.clone(),
+            DescribeConsumerOptionsBuilder::default()
+                .include_stats(true)
+                .build()?,
+        )
+        .await?;
+    assert_eq!(
+        committed_offset(&after),
+        2,
+        "commit_offset did not move the consumer position"
+    );
+
+    // Committing below the current position rewinds the consumer rather than
+    // failing - this is what the doc comment on `commit_offset` promises.
+    topic_client
+        .commit_offset(
+            topic_path.clone(),
+            0,
+            consumer_name.clone(),
+            1,
+            CommitOffsetOptionsBuilder::default().build()?,
+        )
+        .await?;
+
+    let rewound = topic_client
+        .describe_consumer(
+            topic_path.clone(),
+            consumer_name.clone(),
+            DescribeConsumerOptionsBuilder::default()
+                .include_stats(true)
+                .build()?,
+        )
+        .await?;
+    assert_eq!(
+        committed_offset(&rewound),
+        1,
+        "committing below the current position should rewind the consumer"
+    );
+
+    // A negative offset must be rejected by the server, not silently accepted.
+    let err = topic_client
+        .commit_offset(
+            topic_path.clone(),
+            0,
+            consumer_name,
+            -1,
+            CommitOffsetOptionsBuilder::default().build()?,
+        )
+        .await
+        .expect_err("a negative offset must be rejected");
+    debug!("negative offset rejected as expected: {err}");
+
+    topic_client.drop_topic(topic_path).await?;
 
     Ok(())
 }

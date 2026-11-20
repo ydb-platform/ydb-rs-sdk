@@ -8,6 +8,7 @@ use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::raw_topic_service::alter_topic::RawAlterTopicRequest;
+use crate::grpc_wrapper::raw_topic_service::commit_offset::RawCommitOffsetRequest;
 use crate::grpc_wrapper::raw_topic_service::create_topic::RawCreateTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::describe_consumer::{
     RawDescribeConsumerRequest, RawDescribeConsumerResult,
@@ -86,6 +87,14 @@ impl RawTopicClient {
         request_without_result!(
             self.service.drop_topic,
             req => ydb_grpc::ydb_proto::topic::DropTopicRequest
+        );
+    }
+
+    #[instrument(name = "ydb.grpc.CommitOffset", skip_all, fields(ydb.topic.path = %req.path, ydb.consumer.name = %req.consumer), err)]
+    pub async fn commit_offset(&mut self, req: RawCommitOffsetRequest) -> RawResult<()> {
+        request_without_result!(
+            self.service.commit_offset,
+            req => ydb_grpc::ydb_proto::topic::CommitOffsetRequest
         );
     }
 
