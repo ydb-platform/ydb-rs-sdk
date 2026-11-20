@@ -4,9 +4,6 @@ use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::raw_table_service::alter_table::RawAlterTableRequest;
 use crate::grpc_wrapper::raw_table_service::bulk_upsert::RawBulkUpsertRequest;
-use crate::grpc_wrapper::raw_table_service::commit_transaction::{
-    RawCommitTransactionRequest, RawCommitTransactionResult,
-};
 use crate::grpc_wrapper::raw_table_service::copy_table::{
     RawCopyTableRequest, RawCopyTablesRequest,
 };
@@ -21,16 +18,12 @@ use crate::grpc_wrapper::raw_table_service::describe_table_options::{
     RawDescribeTableOptionsRequest, RawDescribeTableOptionsResult,
 };
 use crate::grpc_wrapper::raw_table_service::drop_table::RawDropTableRequest;
-use crate::grpc_wrapper::raw_table_service::execute_data_query::{
-    RawExecuteDataQueryRequest, RawExecuteDataQueryResult,
-};
 use crate::grpc_wrapper::raw_table_service::execute_scheme_query::RawExecuteSchemeQueryRequest;
 use crate::grpc_wrapper::raw_table_service::explain_data_query::{
     RawExplainDataQueryRequest, RawExplainDataQueryResult,
 };
 use crate::grpc_wrapper::raw_table_service::read_rows::{RawReadRowsRequest, RawReadRowsResponse};
 use crate::grpc_wrapper::raw_table_service::rename_tables::RawRenameTablesRequest;
-use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
 use crate::grpc_wrapper::raw_table_service::stream_read_table::RawStreamReadTableRequest;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use tracing::{instrument, trace};
@@ -61,18 +54,6 @@ impl RawTableClient {
         self
     }
 
-    #[instrument(name = "ydb.grpc.CommitTransaction", skip_all, fields(db.system.name = "ydb", ydb.session.id = %req.session_id), err)]
-    pub async fn commit_transaction(
-        &mut self,
-        req: RawCommitTransactionRequest,
-    ) -> RawResult<RawCommitTransactionResult> {
-        request_with_result!(
-            self.service.commit_transaction,
-            req => ydb_grpc::ydb_proto::table::CommitTransactionRequest,
-            ydb_grpc::ydb_proto::table::CommitTransactionResult => crate::grpc_wrapper::raw_table_service::commit_transaction::RawCommitTransactionResult
-        );
-    }
-
     #[instrument(name = "ydb.grpc.CreateSession", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn create_session(&mut self) -> RawResult<RawCreateSessionResult> {
         let req = RawCreateSessionRequest {
@@ -83,18 +64,6 @@ impl RawTableClient {
             self.service.create_session,
             req => ydb_grpc::ydb_proto::table::CreateSessionRequest,
             ydb_grpc::ydb_proto::table::CreateSessionResult => RawCreateSessionResult
-        );
-    }
-
-    #[instrument(name = "ydb.grpc.ExecuteDataQuery", skip_all, fields(db.system.name = "ydb", ydb.session.id = %req.session_id, ydb.query.text = %crate::traces::helpers::ensure_len_string(&req.yql_text)), err)]
-    pub async fn execute_data_query(
-        &mut self,
-        req: RawExecuteDataQueryRequest,
-    ) -> RawResult<RawExecuteDataQueryResult> {
-        request_with_result!(
-            self.service.execute_data_query,
-            req => ydb_grpc::ydb_proto::table::ExecuteDataQueryRequest,
-            ydb_grpc::ydb_proto::table::ExecuteQueryResult => RawExecuteDataQueryResult
         );
     }
 
@@ -127,17 +96,6 @@ impl RawTableClient {
             self.service.read_rows,
             req => ydb_grpc::ydb_proto::table::ReadRowsRequest,
             ydb_grpc::ydb_proto::table::ReadRowsResponse => RawReadRowsResponse
-        );
-    }
-
-    #[instrument(name = "ydb.grpc.RollbackTransaction", skip_all, fields(db.system.name = "ydb", ydb.session.id = %req.session_id), err)]
-    pub async fn rollback_transaction(
-        &mut self,
-        req: RawRollbackTransactionRequest,
-    ) -> RawResult<()> {
-        request_without_result!(
-            self.service.rollback_transaction,
-            req => ydb_grpc::ydb_proto::table::RollbackTransactionRequest
         );
     }
 
