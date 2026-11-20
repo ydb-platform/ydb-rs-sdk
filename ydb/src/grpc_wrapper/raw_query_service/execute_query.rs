@@ -164,7 +164,7 @@ pub(crate) fn append_rows_from_part(
     let Some(proto_set) = part.result_set else {
         return Ok(());
     };
-    let part_set = RawResultSet::try_from(proto_set)?;
+    let part_set = RawResultSet::from_proto_part(proto_set, columns)?;
     *truncated |= part_set.truncated;
     if !columns.is_empty()
         && !part_set.columns.is_empty()
