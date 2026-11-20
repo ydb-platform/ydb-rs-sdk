@@ -81,6 +81,7 @@ impl<'a> TopicReaderTx<'a> {
             ));
             return Err(err);
         }
+        self.inner.record_delivery(&batch);
         Ok(batch)
     }
 

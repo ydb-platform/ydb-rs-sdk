@@ -165,6 +165,7 @@ impl Client {
             self.connection_manager.clone(),
             self.credentials.token_cache.clone(),
             self.executor.clone(),
+            self.metrics_names.topics.clone(),
         )
     }
 

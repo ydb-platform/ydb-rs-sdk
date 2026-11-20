@@ -4,6 +4,7 @@ use super::topicwriter::writer_tx_options::{TopicWriterTxOptions, TopicWriterTxO
 use crate::YdbError::InternalError;
 use crate::client::TimeoutSettings;
 use crate::client_common::TokenCache;
+use crate::client_metrics::names::TopicMetrics;
 use crate::client_query::Transaction;
 use crate::client_topic::list_types::{AlterConsumer, Consumer, MeteringMode};
 use crate::client_topic::topicreader::reader::{TopicReader, TopicSelectors};
@@ -118,12 +119,51 @@ impl From<UninitializedFieldError> for errors::YdbError {
     }
 }
 
+/// Manages topics and opens readers and writers.
+///
+/// # Message counters
+///
+/// Install a `metrics` recorder before opening the first reader or writer.
+/// Counters are shared by readers or writers on the same driver and carry its
+/// `driver_name` label (default `main`).
+///
+/// | Counter | What it counts |
+/// | --- | --- |
+/// | `ydb.topic.writer.sending.messages` | Messages accepted into the writer queue, once per enqueue. |
+/// | `ydb.topic.writer.sending.bytes` | Original payload bytes of those messages, before compression. |
+/// | `ydb.topic.reader.received.bytes` | Bytes reported by the server, including responses that fail to decode. |
+/// | `ydb.topic.reader.received.messages` | Decoded messages added to a partition buffer, including redeliveries. |
+/// | `ydb.topic.reader.delivered.messages` | Messages returned to the application. Transactional reads count after offset registration succeeds. |
+///
+/// ## Prometheus
+///
+/// The default recorder from `metrics-prometheus 0.11.2` rejects these dotted names
+/// when a reader or writer opens. This panics in debug builds and drops the counters
+/// in release builds. `metrics-exporter-prometheus` converts the dots to underscores.
+/// To migrate, add `metrics-exporter-prometheus = { version = "0.18.3", default-features = false }`
+/// to the application's dependencies and install the recorder once at startup.
+/// These bucket boundaries preserve the previous recorder's default Query histograms.
+///
+/// ```no_run
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let handle = metrics_exporter_prometheus::PrometheusBuilder::new()
+///     .set_buckets(&[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0])?
+///     .install_recorder()?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// Serve `handle.render()` from the scrape endpoint alongside any existing
+/// `prometheus` collectors. Use `set_buckets_for_metric` for custom histogram
+/// boundaries. Leave counter expiration disabled (the default) because the driver
+/// retains its counter handles. See the [exporter's upkeep instructions](https://docs.rs/metrics-exporter-prometheus/0.18.3/metrics_exporter_prometheus/#upkeep-and-maintenance).
 #[derive(Clone)]
 pub struct TopicClient {
     timeouts: TimeoutSettings,
     connection_manager: GrpcConnectionManager,
     token_cache: TokenCache,
     executor: Arc<dyn Executor>,
+    metrics: Arc<TopicMetrics>,
 }
 
 impl TopicClient {
@@ -131,12 +171,14 @@ impl TopicClient {
         connection_manager: GrpcConnectionManager,
         token_cache: TokenCache,
         executor: Arc<dyn Executor>,
+        metrics: Arc<TopicMetrics>,
     ) -> Self {
         Self {
             timeouts: TimeoutSettings::default(),
             connection_manager,
             token_cache,
             executor,
+            metrics,
         }
     }
 
@@ -228,6 +270,7 @@ impl TopicClient {
             self.connection_manager.clone(),
             self.token_cache.clone(),
             self.executor.clone(),
+            self.metrics.reader(),
         )
         .await
     }
@@ -242,6 +285,7 @@ impl TopicClient {
             self.connection_manager.clone(),
             self.token_cache.clone(),
             self.executor.clone(),
+            self.metrics.reader(),
         )
         .await
     }
@@ -255,6 +299,7 @@ impl TopicClient {
             writer_options,
             self.connection_manager.clone(),
             self.executor.clone(),
+            self.metrics.writer(),
         )
         .await
     }
@@ -279,6 +324,7 @@ impl TopicClient {
             writer_tx_options,
             self.connection_manager.clone(),
             self.executor.clone(),
+            self.metrics.writer(),
             tx,
         )
         .await
@@ -290,6 +336,7 @@ impl TopicClient {
             TopicWriterOptions::builder().topic_path(path).build(),
             self.connection_manager.clone(),
             self.executor.clone(),
+            self.metrics.writer(),
         )
         .await
     }

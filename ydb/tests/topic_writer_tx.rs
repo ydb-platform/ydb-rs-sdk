@@ -11,6 +11,7 @@ use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage
 use ydb_grpc::ydb_proto::topic::stream_write_message::init_request::Partitioning;
 
 use crate::mock_server::handler::{FromHandlerToService, Handler, Incoming, Reply, ReplySink};
+use crate::mock_server::metrics::TestMetrics;
 use crate::mock_server::query::QueryIncoming;
 use crate::mock_server::server::MockServer;
 use crate::mock_server::topic::{TopicIncoming, builders};
@@ -178,7 +179,8 @@ async fn write_wrong_ack_status_returns_error() -> YdbResult<()> {
         offset: WRONG_ACK_OFFSET,
     });
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server).await?;
+    let (client, metrics) = TestMetrics::client(&server).await?;
+    let _guard = metrics.install_local();
 
     let result = client
         .query_client()
@@ -195,6 +197,12 @@ async fn write_wrong_ack_status_returns_error() -> YdbResult<()> {
         .await;
 
     assert!(result.is_err(), "expected error for non-WrittenInTx ack");
+
+    assert_eq!(metrics.counter("ydb_topic_writer_sending_messages"), 1);
+    assert_eq!(
+        metrics.counter("ydb_topic_writer_sending_bytes"),
+        TEST_MESSAGE_DATA.len() as u64
+    );
 
     let tx_lifecycle = tx_lifecycle.lock().unwrap();
     assert_eq!(tx_lifecycle.begin_count, 1);
@@ -245,7 +253,8 @@ async fn regular_writer_sends_no_tx_identity() -> YdbResult<()> {
     });
     let (server, _reply_tx) = MockServer::start(handler).await;
 
-    let client = make_client(&server).await?;
+    let (client, metrics) = TestMetrics::client(&server).await?;
+    let _guard = metrics.install_local();
     let writer = client
         .topic_client()
         .create_writer(TOPIC_PATH.to_string())
@@ -253,6 +262,12 @@ async fn regular_writer_sends_no_tx_identity() -> YdbResult<()> {
 
     writer.write_with_ack(test_message()).await?;
     writer.stop().await?;
+
+    assert_eq!(metrics.counter("ydb_topic_writer_sending_messages"), 1);
+    assert_eq!(
+        metrics.counter("ydb_topic_writer_sending_bytes"),
+        TEST_MESSAGE_DATA.len() as u64
+    );
 
     let identity = captured_tx.lock().unwrap().clone();
     assert!(

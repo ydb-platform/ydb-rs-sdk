@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, trace};
 use ydb_grpc::ydb_proto::topic::stream_write_message;
 
+use crate::client_metrics::names::TopicWriterMetrics;
 use crate::client_topic::compression::Executor;
 use crate::client_topic::topicwriter::connection::ConnectionInfo;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
@@ -29,6 +30,7 @@ use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 
 pub(crate) struct ReconnectorParams {
     pub(crate) writer_options: TopicWriterOptions,
+    pub(crate) metrics: TopicWriterMetrics,
     pub(crate) producer_id: String,
     pub(crate) connection_manager: GrpcConnectionManager,
     pub(crate) cancellation_token: CancellationToken,
@@ -74,6 +76,7 @@ impl Reconnector {
             params.status_validator,
             params.writer_options.auto_seq_no,
             flow_control,
+            params.metrics,
         )?;
         let cancellation_token = params.cancellation_token;
 

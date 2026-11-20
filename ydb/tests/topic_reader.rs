@@ -3,16 +3,17 @@ mod mock_server;
 use flate2::{Compression, write::GzEncoder};
 use std::io::Write;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::Poll;
 use tokio::sync::Notify;
 use ydb::{
-    ClientBuilder, Codec, CompressionDecoder, Executor, TopicReader, TopicReaderBatch,
-    TopicReaderCommitMarker, TopicReaderOptions, YdbResult,
+    Client, ClientBuilder, Codec, CompressionDecoder, Executor, TopicReader, TopicReaderBatch,
+    TopicReaderCommitMarker, TopicReaderOptions, Transaction, YdbResult, closure,
 };
 use ydb_grpc::ydb_proto::topic::stream_read_message::from_client::ClientMessage as ReadFromClient;
 
 use crate::mock_server::handler::{FromHandlerToService, Handler, Incoming, Reply};
+use crate::mock_server::metrics::TestMetrics;
 use crate::mock_server::server::MockServer;
 use crate::mock_server::topic::{TopicIncoming, builders};
 
@@ -83,6 +84,7 @@ const RACE_CODEC: Codec = Codec { code: 10002 };
 #[derive(Default)]
 struct ServerState {
     partition_ready: Notify,
+    reject_offset_update: AtomicBool,
     commits_seen: AtomicUsize,
     commits_changed: Notify,
     stops_seen: AtomicUsize,
@@ -126,6 +128,15 @@ struct Counter {
 
 impl Handler for Counter {
     fn handle(&self, incoming: Incoming) -> Option<Incoming> {
+        if self.state.reject_offset_update.load(Ordering::SeqCst)
+            && let Incoming::Topic(TopicIncoming::UpdateOffsetsInTransaction(_, reply_tx)) =
+                incoming
+        {
+            let _ = reply_tx.send(Err(tonic::Status::invalid_argument(
+                "offset update rejected",
+            )));
+            return None;
+        }
         if let Incoming::Topic(TopicIncoming::StreamRead { stream_id, msg }) = &incoming {
             match msg {
                 ReadFromClient::InitRequest(_) => {
@@ -242,6 +253,10 @@ async fn make_reader_with_batch_size(
     .build()
     .await?;
 
+    reader_with_client(&client, batch_size).await
+}
+
+async fn reader_with_client(client: &Client, batch_size: usize) -> YdbResult<TopicReader> {
     client
         .topic_client()
         .create_reader_with_params(
@@ -306,6 +321,152 @@ topic_test!(reads_gzip_message, timeout_secs = 1, {
     let batch = reader.read_batch().await?;
     assert_single_message_batch(batch, 0, payload).await?;
 
+    Ok(())
+});
+
+topic_test!(
+    reader_counts_buffered_and_delivered_messages,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+        let (client, metrics) = TestMetrics::client(&driver.server).await?;
+        let _guard = metrics.install_local();
+        let mut reader = reader_with_client(&client, 2).await?;
+        driver.state.partition_ready.notified().await;
+
+        let stream_id = driver.state.current_stream_id();
+        // A malformed negative size must not wrap the unsigned counter.
+        driver.send(
+            builders::read_response_batch_with_codec(
+                stream_id,
+                PARTITION_SESSION_ID,
+                -1,
+                Vec::new(),
+                Codec::RAW,
+            )
+            .into(),
+        );
+        driver.send(
+            builders::read_response_batch_with_codec(
+                stream_id,
+                PARTITION_SESSION_ID,
+                43, // Server-reported size can differ from the sum of payload lengths.
+                vec![
+                    (0, 3, b"one".to_vec()),
+                    (1, 3, b"two".to_vec()),
+                    (2, 5, b"three".to_vec()),
+                ],
+                Codec::RAW,
+            )
+            .into(),
+        );
+        // The reader processes this control message after buffering the preceding data.
+        driver
+            .send(builders::start_partition_session_request(stream_id, 2, TOPIC_PATH, 1, 0).into());
+        driver.state.partition_ready.notified().await;
+        assert_eq!(metrics.counter("ydb_topic_reader_received_bytes"), 43);
+        assert_eq!(metrics.counter("ydb_topic_reader_received_messages"), 3);
+        assert_eq!(metrics.counter("ydb_topic_reader_delivered_messages"), 0);
+
+        assert_eq!(reader.read_batch().await?.messages.len(), 2);
+        assert_eq!(metrics.counter("ydb_topic_reader_delivered_messages"), 2);
+        assert_single_message_batch(reader.read_batch().await?, 2, b"three").await?;
+        assert_eq!(metrics.counter("ydb_topic_reader_delivered_messages"), 3);
+        Ok(())
+    }
+);
+
+topic_test!(
+    transactional_delivery_requires_registered_offsets,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+        let (client, metrics) = TestMetrics::client(&driver.server).await?;
+        let _guard = metrics.install_local();
+        let mut reader = reader_with_client(&client, 1).await?;
+        driver.state.partition_ready.notified().await;
+        client
+            .query_client()
+            .retry_tx(closure!(
+                [&mut reader, &driver, &metrics],
+                async |tx: &mut Transaction| {
+                    tx.begin().await?;
+                    driver.send_read_response(0, b"one");
+                    assert_single_message_batch(reader.pop_batch_in_tx(tx).await?, 0, b"one")
+                        .await?;
+                    assert_eq!(metrics.counter("ydb_topic_reader_delivered_messages"), 1);
+
+                    let mut reader_tx = reader.tx_reader(tx).await?;
+                    driver.send_read_response(1, b"two");
+                    assert_single_message_batch(reader_tx.read_batch().await?, 1, b"two").await?;
+                    assert_eq!(metrics.counter("ydb_topic_reader_delivered_messages"), 2);
+
+                    driver
+                        .state
+                        .reject_offset_update
+                        .store(true, Ordering::SeqCst);
+                    driver.send_read_response(2, b"three");
+                    let err = reader_tx
+                        .read_batch()
+                        .await
+                        .expect_err("offset update must fail");
+                    assert!(err.to_string().contains("offset update rejected"), "{err}");
+                    assert_eq!(metrics.counter("ydb_topic_reader_received_messages"), 3);
+                    assert_eq!(metrics.counter("ydb_topic_reader_delivered_messages"), 2);
+                    Ok(())
+                }
+            ))
+            .await?;
+        Ok(())
+    }
+);
+
+topic_test!(
+    pop_batch_in_tx_does_not_count_delivery_on_offset_error,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+        let (client, metrics) = TestMetrics::client(&driver.server).await?;
+        let _guard = metrics.install_local();
+        let mut reader = reader_with_client(&client, 1).await?;
+        driver.state.partition_ready.notified().await;
+        driver
+            .state
+            .reject_offset_update
+            .store(true, Ordering::SeqCst);
+        driver.send_read_response(0, b"one");
+
+        let err = client
+            .query_client()
+            .retry_tx(closure!([&mut reader], async |tx: &mut Transaction| {
+                tx.begin().await?;
+                Ok(reader.pop_batch_in_tx(tx).await?)
+            }))
+            .await
+            .expect_err("offset update must fail");
+
+        assert!(err.to_string().contains("offset update rejected"), "{err}");
+        assert_eq!(metrics.counter("ydb_topic_reader_received_messages"), 1);
+        assert_eq!(metrics.counter("ydb_topic_reader_delivered_messages"), 0);
+        Ok(())
+    }
+);
+
+topic_test!(invalid_gzip_counts_only_received_bytes, timeout_secs = 5, {
+    let driver = Driver::start().await;
+    let (client, metrics) = TestMetrics::client(&driver.server).await?;
+    let _guard = metrics.install_local();
+    let mut reader = reader_with_client(&client, 1).await?;
+    driver.state.partition_ready.notified().await;
+    driver.send_read_response_with_codec(0, 100, b"invalid gzip", Codec::GZIP);
+    let err = reader
+        .read_batch()
+        .await
+        .expect_err("invalid gzip must fail");
+    assert!(err.to_string().contains("failed to decode"), "{err}");
+    assert_eq!(metrics.counter("ydb_topic_reader_received_bytes"), 12);
+    assert_eq!(metrics.counter("ydb_topic_reader_received_messages"), 0);
+    assert_eq!(metrics.counter("ydb_topic_reader_delivered_messages"), 0);
     Ok(())
 });
 
