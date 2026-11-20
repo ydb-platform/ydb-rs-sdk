@@ -1,7 +1,30 @@
+use crate::grpc_wrapper::raw_table_service::partitioning_settings::RawPartitioningSettings;
 use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use std::collections::HashMap;
-use ydb_grpc::ydb_proto::table::{ColumnMeta, CreateTableRequest};
+use ydb_grpc::ydb_proto::TypedValue;
+use ydb_grpc::ydb_proto::table::{
+    ColumnMeta, CreateTableRequest, ExplicitPartitions, create_table_request,
+};
+
+/// Initial partition layout, the `partitions` oneof of `CreateTableRequest`.
+pub(crate) enum RawPartitions {
+    /// Split the key range into `count` equal parts.
+    Uniform(u64),
+    /// Use the given key values as partition borders.
+    AtKeys(Vec<TypedValue>),
+}
+
+impl From<RawPartitions> for create_table_request::Partitions {
+    fn from(value: RawPartitions) -> Self {
+        match value {
+            RawPartitions::Uniform(count) => Self::UniformPartitions(count),
+            RawPartitions::AtKeys(split_points) => {
+                Self::PartitionAtKeys(ExplicitPartitions { split_points })
+            }
+        }
+    }
+}
 
 pub(crate) struct RawCreateTableColumn {
     pub name: String,
@@ -17,6 +40,8 @@ pub(crate) struct RawCreateTableRequest {
     pub primary_key: Vec<String>,
     pub attributes: HashMap<String, String>,
     pub operation_params: RawOperationParams,
+    pub partitioning_settings: Option<RawPartitioningSettings>,
+    pub partitions: Option<RawPartitions>,
 }
 
 impl From<RawCreateTableRequest> for CreateTableRequest {
@@ -38,6 +63,8 @@ impl From<RawCreateTableRequest> for CreateTableRequest {
             primary_key: value.primary_key,
             attributes: value.attributes,
             operation_params: Some(value.operation_params.into()),
+            partitioning_settings: value.partitioning_settings.map(Into::into),
+            partitions: value.partitions.map(Into::into),
             ..Default::default()
         }
     }
