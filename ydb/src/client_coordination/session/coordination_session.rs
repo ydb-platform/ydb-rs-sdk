@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use rand::RngCore;
 use tokio::{
@@ -55,6 +55,8 @@ pub struct CoordinationSession {
     path: String,
 
     cancellation_token: CancellationToken,
+    /// Why the receiver loop ended, if it ended on an error.
+    failure: Arc<OnceLock<YdbError>>,
     receiver_loop: JoinHandle<()>,
 
     raw_sender: mpsc::UnboundedSender<SessionRequest>,
@@ -115,7 +117,10 @@ impl CoordinationSession {
 
         let raw_sender = stream.clone_sender();
 
+        let failure = Arc::new(OnceLock::new());
+
         let loop_token = cancellation_token.clone();
+        let loop_failure = failure.clone();
         let loop_sender = stream.clone_sender();
         let loop_controllers = method_controllers.clone();
 
@@ -130,8 +135,12 @@ impl CoordinationSession {
                 .await
                 {
                     Ok(LoopStep::Continue) => {}
-                    Ok(LoopStep::Stopped) | Err(_) => {
+                    Ok(LoopStep::Stopped) => {
                         loop_token.cancel();
+                        return;
+                    }
+                    Err(error) => {
+                        fail_session(&loop_token, &loop_failure, error);
                         return;
                     }
                 };
@@ -144,6 +153,7 @@ impl CoordinationSession {
 
             receiver_loop,
             cancellation_token,
+            failure,
 
             raw_sender,
             method_controllers,
@@ -170,21 +180,17 @@ impl CoordinationSession {
     /// outlive it and the response channel is never closed. Without this race
     /// the caller waits for a reply that cannot arrive, with no deadline.
     ///
+    /// A session that ended on an error, such as the server failing the
+    /// session stream with a status, hands that error to the caller, so it
+    /// sees why the session ended rather than only that it did.
+    ///
     /// Biased towards the reply, so one that lands in the same moment the
     /// session ends is still delivered rather than discarded.
     async fn recv_while_alive<Response>(
         &self,
         rx: &mut mpsc::UnboundedReceiver<Response>,
     ) -> YdbResult<Response> {
-        tokio::select! {
-            biased;
-            response = rx.recv() => {
-                response.ok_or_else(|| YdbError::Custom("channel closed".to_string()))
-            }
-            () = self.cancellation_token.cancelled() => {
-                Err(YdbError::Custom("coordination session lost".to_string()))
-            }
-        }
+        recv_while_alive(rx, &self.cancellation_token, &self.failure).await
     }
 
     pub async fn create_semaphore<S: ToString>(
@@ -416,9 +422,113 @@ impl Drop for CoordinationSession {
     }
 }
 
+/// Ends the session on behalf of the receiver loop, recording why.
+///
+/// The error is recorded before the token is cancelled, so a request woken by
+/// the cancellation finds it.
+fn fail_session(
+    cancellation_token: &CancellationToken,
+    failure: &OnceLock<YdbError>,
+    error: YdbError,
+) {
+    trace!("coordination session failed: {:?}", error);
+    // Only the receiver loop sets it, once, as it ends.
+    if failure.set(error).is_err() {
+        trace!("coordination session failure already recorded");
+    }
+    cancellation_token.cancel();
+}
+
+/// Awaits a reply on `rx` unless the session ends first.
+///
+/// See [`CoordinationSession::recv_while_alive`]. A session that ended
+/// without recording an error is reported as lost.
+async fn recv_while_alive<Response>(
+    rx: &mut mpsc::UnboundedReceiver<Response>,
+    cancellation_token: &CancellationToken,
+    failure: &OnceLock<YdbError>,
+) -> YdbResult<Response> {
+    tokio::select! {
+        biased;
+        response = rx.recv() => {
+            response.ok_or_else(|| YdbError::Custom("channel closed".to_string()))
+        }
+        () = cancellation_token.cancelled() => {
+            Err(failure
+                .get()
+                .cloned()
+                .unwrap_or_else(|| YdbError::Custom("coordination session lost".to_string())))
+        }
+    }
+}
+
 /// What the receiver task does after handling one server message.
 enum LoopStep {
     Continue,
     /// The server confirmed the session stopped.
     Stopped,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::YdbStatusError;
+
+    fn unauthorized() -> YdbError {
+        YdbError::YdbStatusError(YdbStatusError {
+            operation_status: 400020,
+            ..YdbStatusError::default()
+        })
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pending_request_gets_the_error_the_session_failed_on() {
+        let (_tx, mut rx) = mpsc::unbounded_channel::<()>();
+        let token = CancellationToken::new();
+        let failure = OnceLock::new();
+
+        let waiting = recv_while_alive(&mut rx, &token, &failure);
+        tokio::pin!(waiting);
+        assert!(futures_util::poll!(&mut waiting).is_pending());
+        fail_session(&token, &failure, unauthorized());
+
+        let result = waiting.await;
+        assert!(
+            matches!(&result, Err(YdbError::YdbStatusError(status)) if status.operation_status == 400020),
+            "unexpected result: {result:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pending_request_sees_a_session_ended_without_an_error_as_lost() {
+        let (_tx, mut rx) = mpsc::unbounded_channel::<()>();
+        let token = CancellationToken::new();
+        let failure = OnceLock::new();
+
+        let waiting = recv_while_alive(&mut rx, &token, &failure);
+        tokio::pin!(waiting);
+        assert!(futures_util::poll!(&mut waiting).is_pending());
+        token.cancel();
+
+        let result = waiting.await;
+        assert!(
+            matches!(&result, Err(YdbError::Custom(message)) if message == "coordination session lost"),
+            "unexpected result: {result:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn reply_that_arrived_wins_over_a_failed_session() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let token = CancellationToken::new();
+        let failure = OnceLock::new();
+
+        tx.send(7).unwrap();
+        fail_session(&token, &failure, unauthorized());
+
+        assert_eq!(
+            recv_while_alive(&mut rx, &token, &failure).await.unwrap(),
+            7
+        );
+    }
 }
