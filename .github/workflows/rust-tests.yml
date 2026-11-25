@@ -68,6 +68,9 @@ jobs:
       with:
         submodules: true
 
+    - name: Enable strict serializable isolation
+      run: bash .github/scripts/enable-strict-serializable.sh ydb
+
     - name: Update dependencies to latest compatible versions
       if: ${{ matrix.latest_deps }}
       run: |

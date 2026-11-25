@@ -170,6 +170,10 @@ To run it:
 1. Set YDB_CONNECTION_STRING env
 2. run cargo test -- --include-ignored
 
+The commit timestamp integration test requires a YDB server with
+`TableServiceConfig.EnableStrictSerializableIsolation` enabled. For a local YDB container named
+`ydb`, run `bash .github/scripts/enable-strict-serializable.sh ydb` after the server becomes healthy.
+
 # Version policy
 
 Crates follow to semver 2.0 https://semver.org/spec/v2.0.0.html.
