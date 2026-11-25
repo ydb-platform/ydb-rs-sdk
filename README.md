@@ -171,8 +171,8 @@ To run it:
 2. run cargo test -- --include-ignored
 
 The commit timestamp integration test requires a YDB server with
-`TableServiceConfig.EnableStrictSerializableIsolation` enabled. For a local YDB container named
-`ydb`, run `bash .github/scripts/enable-strict-serializable.sh ydb` after the server becomes healthy.
+`TableServiceConfig.EnableStrictSerializableIsolation` enabled. The CI test matrix
+enables it in its YDB service.
 
 # Version policy
 
