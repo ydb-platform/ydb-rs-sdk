@@ -25,7 +25,9 @@ pub(crate) struct GrpcConnectionManagerGeneric<BalancerT, ConnectionT: Connectio
     #[derivative(Debug = "ignore")]
     interceptor: MultiInterceptor,
     database: String,
-    opts: GrpcOptions,
+    /// The one gRPC option the manager reads itself; the pool keeps the
+    /// rest, so a manager cloned into each session stays small.
+    max_message_size: usize,
 }
 
 impl<BalancerT, ConnectionT: Connection> GrpcConnectionManagerGeneric<BalancerT, ConnectionT> {
@@ -35,14 +37,15 @@ impl<BalancerT, ConnectionT: Connection> GrpcConnectionManagerGeneric<BalancerT,
         interceptor: MultiInterceptor,
         opts: GrpcOptions,
     ) -> Self {
-        let cp = ConnectionPool::new(opts.clone());
+        let max_message_size = opts.max_message_size;
+        let cp = ConnectionPool::new(opts);
 
         Self {
             balancer,
             connections_pool: cp.into(),
             interceptor,
             database,
-            opts,
+            max_message_size,
         }
     }
 
@@ -73,7 +76,7 @@ impl<BalancerT, ConnectionT: Connection> GrpcConnectionManagerGeneric<BalancerT,
         let channel = self.connections_pool.connection(uri).await?;
 
         let intercepted_channel = InterceptedChannel::new(channel, self.interceptor.clone());
-        Ok(new(intercepted_channel).with_grpc_max_message_size(self.opts.max_message_size))
+        Ok(new(intercepted_channel).with_grpc_max_message_size(self.max_message_size))
     }
 
     #[instrument(name = "ydb.ConnectionManager.GetEndpoint", skip_all, fields(ydb.service.name = ?service))]
@@ -89,6 +92,6 @@ impl<BalancerT, ConnectionT: Connection> GrpcConnectionManagerGeneric<BalancerT,
     }
 
     pub(crate) fn max_message_size(&self) -> usize {
-        self.opts.max_message_size
+        self.max_message_size
     }
 }
