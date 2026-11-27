@@ -347,11 +347,20 @@ pub fn configure_tls_endpoint(
     domain: &str,
     tls_config: Option<ClientTlsConfig>,
 ) -> YdbResult<Endpoint> {
-    Ok(endpoint.tls_config(tls_config.unwrap_or_else(|| {
-        ClientTlsConfig::new()
+    // The server name must be applied to an explicitly provided config too.
+    // `RacyRoundRobin` replaces the URI authority with a resolved IP while
+    // keeping the original host in `domain`, so a config without a server
+    // name makes rustls verify the certificate against that IP and fail.
+    // Each node serves its own certificate, so a single name cannot be shared
+    // and the name has to come from the per-endpoint `domain`.
+    let tls_config = match tls_config {
+        Some(config) => config.domain_name(domain.to_owned()),
+        None => ClientTlsConfig::new()
             .domain_name(domain.to_owned())
-            .with_native_roots()
-    }))?)
+            .with_native_roots(),
+    };
+
+    Ok(endpoint.tls_config(tls_config)?)
 }
 
 #[cfg(test)]
