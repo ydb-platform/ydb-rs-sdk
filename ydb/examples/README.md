@@ -80,6 +80,7 @@ YQL (including DDL) and multi-statement transactions use [`QueryClient`](https:/
 |---------|---------------|
 | `basic-logs` | Enabling verbose `tracing` output |
 | `tracing-select-upsert` | Instrumenting queries with `tracing` spans |
+| `metrics` | All SDK metric series in Prometheus format (`/metrics`) with a docker-compose VictoriaMetrics + Grafana stack — see [metrics/README.md](metrics/README.md) |
 
 ## Additional dependencies for some examples
 ### auth-yc-cmdline

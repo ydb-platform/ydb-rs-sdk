@@ -1,0 +1,9 @@
+# VictoriaMetrics scrape config for the `metrics` example.
+# The example listens on METRICS_PORT (default 9090); if you override it, set
+# the matching port here (VictoriaMetrics does not expand env vars in targets).
+scrape_configs:
+  - job_name: ydb-sdk-example
+    scrape_interval: 5s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:9090"]
