@@ -282,7 +282,7 @@ impl ClientBuilder {
             .unwrap_or_else(RetrySettings::with_default_backoff);
 
         let db_cred = DBCredentials {
-            token_cache: TokenCache::new(self.credentials.clone()),
+            token_cache: TokenCache::new(self.credentials.clone(), retry_settings.clone()),
             database: self.database.clone(),
         };
 
