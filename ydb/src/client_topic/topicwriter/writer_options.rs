@@ -72,6 +72,10 @@ pub struct TopicWriterOptions {
     #[builder(into)]
     pub(crate) topic_path: String,
 
+    /// Optional writer name used in topic metrics.
+    #[builder(into)]
+    pub(crate) writer_name: Option<String>,
+
     // producer identity & routing
     pub(crate) producer_id: Option<String>,
     #[builder(default)]

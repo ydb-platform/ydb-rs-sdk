@@ -27,6 +27,41 @@
 //! # }
 //! ```
 //!
+//! # Metrics
+//!
+//! Install a global `metrics` recorder before building the YDB client. The SDK
+//! registers driver metrics at client creation and [topic counters](TopicClient#message-counters)
+//! as writers, readers and their partition sessions open.
+//!
+//! The default recorder in `metrics-prometheus 0.11.2` rejects dotted names.
+//! Opening a topic reader or writer panics in debug builds and drops the new
+//! counters in release builds. To export them, install `metrics-exporter-prometheus`
+//! in the application. It replaces dots with underscores in metric and label names.
+//!
+//! ```no_run
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let handle = metrics_exporter_prometheus::PrometheusBuilder::new()
+//!     .set_buckets(&[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0])?
+//!     .install_recorder()?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! These buckets preserve the previous recorder's default Query histograms.
+//! Serve `handle.render()` alongside any existing Prometheus collectors and
+//! call `handle.run_upkeep()` periodically. Applications using the exporter's
+//! built-in HTTP listener can use `install()` to run upkeep automatically.
+//! Leave counter expiration disabled (the default) while the SDK holds counter handles.
+//!
+//! To keep using `metrics-prometheus 0.11.2` without exporting the new topic
+//! counters, configure its recorder to ignore registration errors. This policy
+//! applies to all metrics recorded through it.
+//!
+//! ```no_run
+//! use metrics_prometheus::{Recorder, failure::strategy::NoOp};
+//! Recorder::builder().with_failure_strategy(NoOp).build_and_install();
+//! ```
+//!
 //! # More examples
 //! [Examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples)
 

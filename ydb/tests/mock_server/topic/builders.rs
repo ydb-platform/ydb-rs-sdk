@@ -214,7 +214,10 @@ pub fn empty_with_status(stream_id: u64, status: StatusCode) -> TopicReply {
     }
 }
 
-fn stream_read(stream_id: u64, msg: stream_read_message::from_server::ServerMessage) -> TopicReply {
+pub fn stream_read(
+    stream_id: u64,
+    msg: stream_read_message::from_server::ServerMessage,
+) -> TopicReply {
     TopicReply::StreamRead {
         stream_id,
         msg: stream_read_message::FromServer {

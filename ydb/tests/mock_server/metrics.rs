@@ -18,8 +18,8 @@ impl TestMetrics {
         Ok((client, Self::new(DRIVER)))
     }
 
-    pub fn counter(&self, name: &str) -> u64 {
-        self.sample(name)
+    pub fn counter(&self, name: &str, labels: &[(&str, &str)]) -> u64 {
+        self.sample(name, labels)
             .unwrap_or_else(|| panic!("missing counter {name}"))
     }
 }

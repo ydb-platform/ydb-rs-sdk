@@ -232,7 +232,7 @@ impl Queue {
                 auto_flush_bytes,
                 auto_flush_interval,
             ),
-            MetricsNames::default().topics.writer(),
+            MetricsNames::default().topics.writer("test-topic", None),
         )
         .unwrap()
     }
@@ -830,7 +830,7 @@ mod tests {
                 TEST_INFLIGHT_BYTES,
                 Duration::from_millis(20),
             ),
-            MetricsNames::default().topics.writer(),
+            MetricsNames::default().topics.writer("test-topic", None),
         )
         .unwrap();
         q.add_message(create_message(1, vec![]), None)
@@ -857,7 +857,7 @@ mod tests {
                     TEST_INFLIGHT_BYTES,
                     Duration::from_millis(20),
                 ),
-                MetricsNames::default().topics.writer(),
+                MetricsNames::default().topics.writer("test-topic", None),
             )
             .unwrap(),
         );

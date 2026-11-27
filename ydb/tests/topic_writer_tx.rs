@@ -187,7 +187,13 @@ async fn write_wrong_ack_status_returns_error() -> YdbResult<()> {
         .retry_tx(closure!([&client], async |tx: &mut Transaction| {
             let mut writer = client
                 .topic_client()
-                .create_writer_tx(TOPIC_PATH.to_string(), tx)
+                .create_writer_tx_with_params(
+                    TopicWriterTxOptionsBuilder::default()
+                        .topic_path(TOPIC_PATH.to_owned())
+                        .writer_name("tx-writer")
+                        .build()?,
+                    tx,
+                )
                 .await?;
 
             let result = writer.write(test_message()).await;
@@ -198,9 +204,18 @@ async fn write_wrong_ack_status_returns_error() -> YdbResult<()> {
 
     assert!(result.is_err(), "expected error for non-WrittenInTx ack");
 
-    assert_eq!(metrics.counter("ydb_topic_writer_sending_messages"), 1);
     assert_eq!(
-        metrics.counter("ydb_topic_writer_sending_bytes"),
+        metrics.counter(
+            "ydb_topic_writer_sending_messages",
+            &[("topic", TOPIC_PATH), ("writer_name", "tx-writer")]
+        ),
+        1
+    );
+    assert_eq!(
+        metrics.counter(
+            "ydb_topic_writer_sending_bytes",
+            &[("topic", TOPIC_PATH), ("writer_name", "tx-writer")]
+        ),
         TEST_MESSAGE_DATA.len() as u64
     );
 
@@ -263,9 +278,15 @@ async fn regular_writer_sends_no_tx_identity() -> YdbResult<()> {
     writer.write_with_ack(test_message()).await?;
     writer.stop().await?;
 
-    assert_eq!(metrics.counter("ydb_topic_writer_sending_messages"), 1);
     assert_eq!(
-        metrics.counter("ydb_topic_writer_sending_bytes"),
+        metrics.counter(
+            "ydb_topic_writer_sending_messages",
+            &[("topic", TOPIC_PATH)]
+        ),
+        1
+    );
+    assert_eq!(
+        metrics.counter("ydb_topic_writer_sending_bytes", &[("topic", TOPIC_PATH)]),
         TEST_MESSAGE_DATA.len() as u64
     );
 

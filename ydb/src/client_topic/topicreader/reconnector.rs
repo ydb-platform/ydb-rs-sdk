@@ -232,7 +232,7 @@ impl Reconnector {
         let auth_token_sender = AuthTokenSender::new(attempt_ctx, outgoing_tx);
 
         let mut tasks: JoinSet<YdbResult<()>> = JoinSet::new();
-        tasks.spawn(grpc.run(runtime.metrics().received_bytes.clone()));
+        tasks.spawn(grpc.run(runtime.metrics().clone()));
         tasks.spawn(decompressor.run());
         tasks.spawn(auth_token_sender.run());
 

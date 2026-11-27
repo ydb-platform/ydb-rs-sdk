@@ -5,9 +5,9 @@ use tokio::sync::futures::Notified;
 use tracing::{debug, warn};
 
 use crate::client_metrics::names::TopicReaderMetrics;
-use crate::client_topic::topicreader::messages::TopicReaderBatch;
 #[cfg(test)]
 use crate::client_topic::topicreader::messages::TopicReaderMessage;
+use crate::client_topic::topicreader::messages::{PendingDelivery, TopicReaderBatch};
 use crate::client_topic::topicreader::partition_state::PartitionSession;
 use crate::client_topic::topicreader::reader::TopicReaderCommitMarker;
 use crate::grpc_wrapper::raw_topic_service::common::partition::RawOffsetsRange;
@@ -89,7 +89,7 @@ impl RuntimeHandle {
                 state: Mutex::new(State::Active(Active::new(connection))),
                 metrics: crate::client_metrics::names::MetricsNames::default()
                     .topics
-                    .reader(),
+                    .reader("consumer", None),
                 messages_available: Notify::new(),
                 reader_id: 0,
                 reconnect_notify: Notify::new(),
@@ -130,8 +130,8 @@ impl RuntimeHandle {
     }
 
     fn handle_read_response(&self, resp: RawReadResponse) -> YdbResult<()> {
-        let mut received_messages = 0;
-        let result: YdbResult<()> = {
+        let messages_queued = {
+            let mut messages_queued = false;
             let mut state = self.lock_state()?;
             let State::Active(active) = &mut *state else {
                 return Ok(());
@@ -139,27 +139,20 @@ impl RuntimeHandle {
             let reader_id = self.inner.reader_id;
             let epoch = active.connection.epoch();
 
-            resp.partition_data.into_iter().try_for_each(|partition| {
-                for batch in partition.batches {
-                    let count = batch.message_data.len();
-                    active.buffer.push_raw_batch(
-                        batch,
-                        partition.partition_session_id,
-                        reader_id,
-                        epoch,
-                    )?;
-                    received_messages += count as u64;
+            for partition_data in resp.partition_data {
+                let partition_session_id = partition_data.partition_session_id;
+                for batch in partition_data.batches {
+                    active
+                        .buffer
+                        .push_raw_batch(batch, partition_session_id, reader_id, epoch)?;
+                    messages_queued = true;
                 }
-                Ok(())
-            })
+            }
+
+            messages_queued
         };
 
-        // A later batch can fail after earlier batches have already entered the buffer.
-        self.metrics()
-            .received_messages
-            .increment(received_messages);
-        result?;
-        if received_messages > 0 {
+        if messages_queued {
             self.inner.messages_available.notify_one();
         }
         Ok(())
@@ -189,7 +182,7 @@ impl RuntimeHandle {
             return Ok(());
         };
 
-        let session = PartitionSession::from(req);
+        let session = PartitionSession::new(req, self.metrics());
         let partition_session_id = session.partition_session_id;
         active.buffer.start(session)?;
         active
@@ -300,7 +293,7 @@ impl RuntimeHandle {
         Ok(())
     }
 
-    pub(crate) async fn pop_batch(&self, cap: usize) -> YdbResult<TopicReaderBatch> {
+    pub(crate) async fn pop_batch(&self, cap: usize) -> YdbResult<PendingDelivery> {
         if cap == 0 {
             return Err(YdbError::Custom(
                 "topic reader pop_batch called with cap=0".into(),
@@ -325,7 +318,10 @@ impl RuntimeHandle {
 
             if let Some(batch) = batch {
                 self.request_bytes(batch.bytes_to_release, batch.epoch)?;
-                return Ok(TopicReaderBatch::from_messages(batch.messages));
+                return Ok(PendingDelivery {
+                    batch: TopicReaderBatch::from_messages(batch.messages),
+                    delivered_messages: batch.delivered_messages,
+                });
             }
 
             notified.await;
@@ -622,7 +618,7 @@ mod tests {
             0,
             crate::client_metrics::names::MetricsNames::default()
                 .topics
-                .reader(),
+                .reader("consumer", None),
         );
         assert!(runtime.commit(commit_marker(0)).is_err());
 
@@ -660,7 +656,11 @@ mod tests {
             .push_batch(vec![TopicReaderMessage::test_message(1, 20)])
             .expect("push should succeed");
 
-        let batch = runtime.pop_batch(10).await.expect("pop should succeed");
+        let batch = runtime
+            .pop_batch(10)
+            .await
+            .expect("pop should succeed")
+            .deliver();
         assert_eq!(batch.messages.len(), 1);
         assert_eq!(batch.messages[0].get_commit_marker().epoch, 1);
     }
@@ -807,32 +807,13 @@ mod tests {
     }
 
     #[test]
-    fn read_response_counts_only_batches_accepted_before_unknown_session() {
+    fn read_response_for_unknown_session_returns_error() {
         let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
-        let received = Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let runtime = RuntimeHandle::new(
-            0,
-            TopicReaderMetrics {
-                received_messages: metrics::Counter::from_arc(received.clone()),
-                ..crate::client_metrics::names::MetricsNames::default()
-                    .topics
-                    .reader()
-            },
-        );
-        runtime
-            .install_connection(
-                Connection::new(outgoing_tx, 0),
-                YdbError::custom("test connection"),
-            )
-            .unwrap();
+        let runtime = RuntimeHandle::with_connection(Connection::new(outgoing_tx, 0));
         activate_test_session(&runtime, 0);
 
-        let mut response = raw_read_response(psid(10), 7);
-        response
-            .partition_data
-            .extend(raw_read_response(psid(99), 23).partition_data);
         let err = runtime
-            .handle_from_server(RawFromServer::ReadResponse(response))
+            .handle_from_server(RawFromServer::ReadResponse(raw_read_response(psid(99), 23)))
             .expect_err("unknown session read response should fail");
 
         assert!(matches!(
@@ -841,7 +822,6 @@ mod tests {
                 if message
                     == "topic reader received messages for unopened partition session (99)"
         ));
-        assert_eq!(received.load(std::sync::atomic::Ordering::Relaxed), 1);
         assert!(outgoing_rx.try_recv().is_err());
     }
 
@@ -898,7 +878,11 @@ mod tests {
             .push_batch(vec![TopicReaderMessage::test_message(1, 15)])
             .expect("push should succeed");
 
-        let batch = runtime.pop_batch(10).await.expect("pop should succeed");
+        let batch = runtime
+            .pop_batch(10)
+            .await
+            .expect("pop should succeed")
+            .deliver();
         assert_eq!(batch.messages.len(), 1);
     }
 

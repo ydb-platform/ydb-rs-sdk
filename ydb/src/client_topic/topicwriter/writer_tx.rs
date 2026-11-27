@@ -5,7 +5,7 @@ use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 use tracing::instrument;
 
 use crate::YdbResult;
-use crate::client_metrics::names::TopicWriterMetrics;
+use crate::client_metrics::names::TopicMetrics;
 use crate::client_query::Transaction;
 use crate::client_query::hooks::{QueryTxCommitStatus, QueryTxHook};
 use crate::client_topic::compression::Executor;
@@ -48,7 +48,7 @@ impl TopicWriterTx {
         options: TopicWriterTxOptions,
         connection_manager: GrpcConnectionManager,
         executor: Arc<dyn Executor>,
-        metrics: TopicWriterMetrics,
+        metrics: &TopicMetrics,
         tx: &mut Transaction,
     ) -> YdbResult<Self> {
         let (session_id, transaction_id) = tx.identity().await?;

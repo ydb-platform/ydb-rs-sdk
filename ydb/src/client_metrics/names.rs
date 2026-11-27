@@ -1,6 +1,4 @@
-use std::sync::{Arc, OnceLock};
-
-use metrics::{Counter, Histogram, Unit, counter, histogram};
+use metrics::{Counter, Histogram, Label, Unit, counter, histogram};
 
 const DEFAULT_DRIVER_NAME: &str = "main";
 
@@ -13,61 +11,82 @@ pub(crate) struct TopicWriterMetrics {
 #[derive(Clone, Debug)]
 pub(crate) struct TopicReaderMetrics {
     pub(crate) received_bytes: Counter,
-    pub(crate) received_messages: Counter,
-    pub(crate) delivered_messages: Counter,
+    labels: Vec<Label>,
 }
 
-#[derive(Debug)]
-pub(crate) struct TopicMetrics {
-    labels: [(&'static str, String); 1],
-    reader: OnceLock<TopicReaderMetrics>,
-    writer: OnceLock<TopicWriterMetrics>,
-}
-
-impl TopicMetrics {
-    pub(crate) fn reader(&self) -> TopicReaderMetrics {
-        self.reader
-            .get_or_init(|| TopicReaderMetrics {
-                received_bytes: counter!(
-                    description: "Bytes reported by topic read responses before decompression",
-                    unit: Unit::Bytes,
-                    "ydb.topic.reader.received.bytes", &self.labels
-                ),
-                received_messages: counter!(
-                    description: "Decoded topic messages accepted into partition session buffers",
-                    unit: Unit::Count,
-                    "ydb.topic.reader.received.messages", &self.labels
-                ),
-                delivered_messages: counter!(
-                    description: "Topic messages returned to the application in successful reads",
-                    unit: Unit::Count,
-                    "ydb.topic.reader.delivered.messages", &self.labels
-                ),
-            })
-            .clone()
+impl TopicReaderMetrics {
+    fn topic_labels(&self, topic: &str) -> Vec<Label> {
+        let mut labels = self.labels.clone();
+        labels.push(Label::new("topic", topic.to_owned()));
+        labels
     }
 
-    pub(crate) fn writer(&self) -> TopicWriterMetrics {
-        self.writer
-            .get_or_init(|| TopicWriterMetrics {
-                sending_messages: counter!(
-                    description: "Messages accepted into the topic writer queue",
-                    unit: Unit::Count,
-                    "ydb.topic.writer.sending.messages", &self.labels
-                ),
-                sending_bytes: counter!(
-                    description: "Uncompressed payload bytes accepted into the topic writer queue",
-                    unit: Unit::Bytes,
-                    "ydb.topic.writer.sending.bytes", &self.labels
-                ),
-            })
-            .clone()
+    pub(crate) fn received_messages(&self, topic: &str) -> Counter {
+        counter!(
+            description: "Topic messages received for open partition sessions before decompression",
+            unit: Unit::Count,
+            "ydb.topic.reader.received.messages", self.topic_labels(topic)
+        )
+    }
+
+    pub(crate) fn delivered_messages(&self, topic: &str) -> Counter {
+        counter!(
+            description: "Topic messages returned to the application in successful reads",
+            unit: Unit::Count,
+            "ydb.topic.reader.delivered.messages", self.topic_labels(topic)
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TopicMetrics {
+    driver: Label,
+}
+
+// Topic labels are known when a reader or writer opens. For a multi-topic
+// reader the server identifies the topic when it starts a partition session.
+impl TopicMetrics {
+    pub(crate) fn reader(&self, consumer: &str, name: Option<&str>) -> TopicReaderMetrics {
+        let mut labels = vec![
+            self.driver.clone(),
+            Label::new("consumer", consumer.to_owned()),
+        ];
+        if let Some(name) = name.filter(|name| !name.is_empty()) {
+            labels.push(Label::new("reader.name", name.to_owned()));
+        }
+        TopicReaderMetrics {
+            received_bytes: counter!(
+                description: "Bytes reported by topic read responses before decompression",
+                unit: Unit::Bytes,
+                "ydb.topic.reader.received.bytes", labels.iter()
+            ),
+            labels,
+        }
+    }
+
+    pub(crate) fn writer(&self, topic: &str, name: Option<&str>) -> TopicWriterMetrics {
+        let mut labels = vec![self.driver.clone(), Label::new("topic", topic.to_owned())];
+        if let Some(name) = name.filter(|name| !name.is_empty()) {
+            labels.push(Label::new("writer.name", name.to_owned()));
+        }
+        TopicWriterMetrics {
+            sending_messages: counter!(
+                description: "Messages accepted into the topic writer queue",
+                unit: Unit::Count,
+                "ydb.topic.writer.sending.messages", labels.iter()
+            ),
+            sending_bytes: counter!(
+                description: "Uncompressed payload bytes accepted into the topic writer queue",
+                unit: Unit::Bytes,
+                "ydb.topic.writer.sending.bytes", labels.iter()
+            ),
+        }
     }
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct MetricsNames {
-    pub(crate) topics: Arc<TopicMetrics>,
+    pub(crate) topics: TopicMetrics,
     pub client_new_counter: Counter,
     pub client_new_table_client_counter: Counter,
     pub client_new_query_client_counter: Counter,
@@ -107,11 +126,9 @@ impl MetricsNames {
             client_transaction_rollback_counter: counter!(description: "ydb client transaction rollback counter", "ydb_client_transaction_rollback_counter", &labels),
             client_row_query_time_histogram: histogram!(description: "ydb row query time histogram", "ydb_row_query_time_histogram", &labels),
             client_transaction_row_query_time_histogram: histogram!(description: "ydb transaction row query time histogram", "ydb_transaction_row_query_time_histogram", &labels),
-            topics: Arc::new(TopicMetrics {
-                labels,
-                reader: OnceLock::new(),
-                writer: OnceLock::new(),
-            }),
+            topics: TopicMetrics {
+                driver: Label::from(&labels[0]),
+            },
         }
     }
 }
@@ -125,43 +142,130 @@ mod tests {
     };
 
     #[test]
+    fn empty_and_omitted_topic_names_export_one_series_per_counter() {
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let _guard = metrics::set_default_local_recorder(&recorder);
+        let topics = MetricsNames::default().topics;
+        for (name, count) in [(None, 2), (Some(""), 3)] {
+            let writer = topics.writer("orders", name);
+            writer.sending_messages.increment(count);
+            writer.sending_bytes.increment(count);
+            let reader = topics.reader("billing", name);
+            reader.received_bytes.increment(count);
+            reader.received_messages("orders").increment(count);
+            reader.delivered_messages("orders").increment(count);
+        }
+
+        let output = recorder.handle().render();
+        let samples: Vec<_> = output
+            .lines()
+            .filter(|line| line.starts_with("ydb_topic_"))
+            .collect();
+        assert_eq!(samples.len(), 5, "{output}");
+        for sample in samples {
+            assert!(sample.ends_with("} 5"), "{sample}");
+            assert!(
+                !sample.contains("reader_name=") && !sample.contains("writer_name="),
+                "{sample}"
+            );
+        }
+    }
+
+    #[test]
     fn topic_counter_names_labels_units_and_values() {
         let recorder = DebuggingRecorder::new();
         let snapshot = recorder.snapshotter();
         let _guard = metrics::set_default_local_recorder(&recorder);
         let metrics = MetricsNames::new(Some("test".into()));
-        let writer = metrics.topics.writer();
+        let writer = metrics.topics.writer("orders", Some("producer"));
         writer.sending_messages.increment(1);
         writer.sending_bytes.increment(2);
-        let reader = metrics.topics.reader();
+        let reader = metrics.topics.reader("billing", Some("worker"));
         reader.received_bytes.increment(3);
-        reader.received_messages.increment(4);
-        reader.delivered_messages.increment(5);
+        reader.received_messages("orders").increment(4);
+        reader.delivered_messages("orders").increment(5);
 
-        let actual = snapshot
-            .snapshot()
-            .into_vec()
-            .into_iter()
-            .filter(|(key, ..)| key.key().name().starts_with("ydb.topic."))
-            .map(|(key, unit, _, value)| {
-                assert_eq!(key.kind(), MetricKind::Counter);
-                assert!(
-                    key.key()
-                        .labels()
-                        .eq([&metrics::Label::new("driver_name", "test")])
-                );
-                (key.key().name().to_owned(), (unit, value))
-            })
-            .collect::<std::collections::BTreeMap<_, _>>();
+        // Opening another reader or writer on this driver must select its own series.
+        let unnamed_writer = metrics.topics.writer("orders", None);
+        unnamed_writer.sending_messages.increment(6);
+        let unnamed_reader = metrics.topics.reader("billing", None);
+        unnamed_reader.received_bytes.increment(7);
+        let other_consumer = metrics.topics.reader("audit", Some("worker"));
+        other_consumer.received_bytes.increment(8);
+
+        let actual = snapshot.snapshot().into_vec();
+        let writer = &[
+            ("driver_name", "test"),
+            ("topic", "orders"),
+            ("writer.name", "producer"),
+        ][..];
+        let reader = &[
+            ("driver_name", "test"),
+            ("consumer", "billing"),
+            ("reader.name", "worker"),
+            ("topic", "orders"),
+        ][..];
         let expected = [
-            ("ydb.topic.writer.sending.messages", Unit::Count, 1),
-            ("ydb.topic.writer.sending.bytes", Unit::Bytes, 2),
-            ("ydb.topic.reader.received.bytes", Unit::Bytes, 3),
-            ("ydb.topic.reader.received.messages", Unit::Count, 4),
-            ("ydb.topic.reader.delivered.messages", Unit::Count, 5),
-        ]
-        .map(|(name, unit, value)| (name.to_owned(), (Some(unit), DebugValue::Counter(value))))
-        .into();
-        assert_eq!(actual, expected);
+            ("ydb.topic.writer.sending.messages", writer, Unit::Count, 1),
+            ("ydb.topic.writer.sending.bytes", writer, Unit::Bytes, 2),
+            (
+                "ydb.topic.reader.received.bytes",
+                &reader[..3],
+                Unit::Bytes,
+                3,
+            ),
+            ("ydb.topic.reader.received.messages", reader, Unit::Count, 4),
+            (
+                "ydb.topic.reader.delivered.messages",
+                reader,
+                Unit::Count,
+                5,
+            ),
+            (
+                "ydb.topic.writer.sending.messages",
+                &writer[..2],
+                Unit::Count,
+                6,
+            ),
+            (
+                "ydb.topic.writer.sending.bytes",
+                &writer[..2],
+                Unit::Bytes,
+                0,
+            ),
+            (
+                "ydb.topic.reader.received.bytes",
+                &reader[..2],
+                Unit::Bytes,
+                7,
+            ),
+            (
+                "ydb.topic.reader.received.bytes",
+                &[
+                    ("driver_name", "test"),
+                    ("consumer", "audit"),
+                    ("reader.name", "worker"),
+                ],
+                Unit::Bytes,
+                8,
+            ),
+        ];
+        assert_eq!(
+            actual
+                .iter()
+                .filter(|(key, ..)| key.key().name().starts_with("ydb.topic."))
+                .count(),
+            expected.len()
+        );
+        for (name, labels, unit, value) in expected {
+            let key = metrics::Key::from_parts(name, labels);
+            let (kind, actual_unit, _, actual_value) = actual
+                .iter()
+                .find(|(metric, ..)| metric.key() == &key)
+                .unwrap_or_else(|| panic!("missing counter {key:?}"));
+            assert_eq!(kind.kind(), MetricKind::Counter);
+            assert_eq!(*actual_unit, Some(unit));
+            assert_eq!(*actual_value, DebugValue::Counter(value));
+        }
     }
 }

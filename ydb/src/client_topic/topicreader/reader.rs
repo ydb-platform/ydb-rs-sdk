@@ -9,11 +9,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use crate::client_common::TokenCache;
-use crate::client_metrics::names::TopicReaderMetrics;
+use crate::client_metrics::names::TopicMetrics;
 use crate::client_query::Transaction;
 use crate::client_topic::compression::Executor;
 use crate::client_topic::topicreader::ids::{PartitionId, PartitionSessionId};
-use crate::client_topic::topicreader::messages::TopicReaderBatch;
+use crate::client_topic::topicreader::messages::{PendingDelivery, TopicReaderBatch};
 use crate::client_topic::topicreader::reader_options::TopicReaderOptions;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_topic_service::client::RawTopicClient;
@@ -50,8 +50,9 @@ impl TopicReader {
         manager: GrpcConnectionManager,
         token_cache: TokenCache,
         compression_executor: Arc<dyn Executor>,
-        metrics: TopicReaderMetrics,
+        metrics: &TopicMetrics,
     ) -> YdbResult<Self> {
+        let metrics = metrics.reader(&options.consumer, options.reader_name.as_deref());
         let cancellation = CancellationToken::new();
         let ReconnectorTask {
             join_handle,
@@ -79,19 +80,10 @@ impl TopicReader {
 
     #[instrument(name = "ydb.TopicReader.ReadBatch", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn read_batch(&mut self) -> YdbResult<TopicReaderBatch> {
-        let batch = self.read_batch_inner().await?;
-        self.record_delivery(&batch);
-        Ok(batch)
+        Ok(self.read_batch_inner().await?.deliver())
     }
 
-    pub(super) fn record_delivery(&self, batch: &TopicReaderBatch) {
-        self.runtime
-            .metrics()
-            .delivered_messages
-            .increment(batch.messages.len() as u64);
-    }
-
-    pub(super) async fn read_batch_inner(&mut self) -> YdbResult<TopicReaderBatch> {
+    pub(super) async fn read_batch_inner(&mut self) -> YdbResult<PendingDelivery> {
         self.runtime.pop_batch(self.options.batch_size).await
     }
 
@@ -102,11 +94,10 @@ impl TopicReader {
     #[instrument(name = "ydb.TopicReader.PopBatchInTx", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn pop_batch_in_tx(&mut self, tx: &mut Transaction) -> YdbResult<TopicReaderBatch> {
         let (session_id, transaction_id) = tx.identity().await?;
-        let batch = self.read_batch_inner().await?;
-        self.update_offsets_in_transaction(&batch, session_id, transaction_id)
+        let pending = self.read_batch_inner().await?;
+        self.update_offsets_in_transaction(&pending.batch, session_id, transaction_id)
             .await?;
-        self.record_delivery(&batch);
-        Ok(batch)
+        Ok(pending.deliver())
     }
 
     #[instrument(name = "ydb.TopicReader.TxReader", skip_all, fields(db.system.name = "ydb"), err)]

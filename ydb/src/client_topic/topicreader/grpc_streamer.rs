@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::convert::Infallible;
 
 use metrics::Counter;
@@ -5,9 +6,10 @@ use tokio::select;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
+use tracing::{debug, warn};
 use ydb_grpc::ydb_proto::topic::stream_read_message::{FromClient, FromServer};
 
+use crate::client_metrics::names::TopicReaderMetrics;
 use crate::{
     TopicReaderOptions, YdbError, YdbResult,
     grpc_connection_manager::GrpcConnectionManager,
@@ -22,6 +24,7 @@ use crate::{
     },
 };
 
+use super::ids::PartitionSessionId;
 use super::reconnector;
 use super::task_supervisor::wait_child_tasks;
 
@@ -53,7 +56,7 @@ impl GrpcStreamer {
         })
     }
 
-    pub(super) async fn run(self, received_bytes: Counter) -> YdbResult<()> {
+    pub(super) async fn run(self, metrics: TopicReaderMetrics) -> YdbResult<()> {
         let Self {
             stream,
             cancellation,
@@ -69,7 +72,7 @@ impl GrpcStreamer {
         tasks.spawn(receive_loop(
             stream,
             decompression_input_tx,
-            received_bytes,
+            metrics,
             stream_cancellation.clone(),
         ));
 
@@ -109,7 +112,7 @@ async fn grpc_connect(
     let init_request = RawInitRequest {
         topics_read_settings: options.topic.clone().into_topics_read_settings(),
         consumer: options.consumer.clone(),
-        reader_name: "".to_string(),
+        reader_name: options.reader_name.clone().unwrap_or_default(),
         auto_partitioning_support: options.auto_partitioning_support,
     };
 
@@ -119,7 +122,7 @@ async fn grpc_connect(
 async fn receive_loop(
     stream: GrpcStream,
     decompression_input_tx: mpsc::UnboundedSender<RawFromServer>,
-    received_bytes: Counter,
+    metrics: TopicReaderMetrics,
     cancellation: CancellationToken,
 ) -> YdbResult<()> {
     select! {
@@ -127,7 +130,7 @@ async fn receive_loop(
             debug!("topic reader grpc receive loop cancelled, stopping");
             Ok(())
         }
-        result = receive_messages(stream, decompression_input_tx, received_bytes) => {
+        result = receive_messages(stream, decompression_input_tx, metrics) => {
             let Err(err) = result;
             Err(err)
         }
@@ -137,18 +140,58 @@ async fn receive_loop(
 async fn receive_messages(
     mut stream: GrpcStream,
     decompression_input_tx: mpsc::UnboundedSender<RawFromServer>,
-    received_bytes: Counter,
+    metrics: TopicReaderMetrics,
 ) -> YdbResult<Infallible> {
+    // Session ids belong to this stream. Follow wire order even when the
+    // decompressor is still handling an earlier control message.
+    let mut sessions = HashMap::new();
     loop {
         let message = stream.receive::<RawFromServer>().await?;
-        if let RawFromServer::ReadResponse(response) = &message
-            && let Ok(bytes) = u64::try_from(response.bytes_size)
-        {
-            received_bytes.increment(bytes);
-        }
+        record_received(&metrics, &mut sessions, &message);
         decompression_input_tx.send(message).map_err(|_| {
             YdbError::Transport("topic reader grpc -> decompressor channel closed".to_string())
         })?;
+    }
+}
+
+fn record_received(
+    metrics: &TopicReaderMetrics,
+    sessions: &mut HashMap<PartitionSessionId, Counter>,
+    message: &RawFromServer,
+) {
+    match message {
+        RawFromServer::StartPartitionSessionRequest(request) => {
+            let session = &request.partition_session;
+            sessions
+                .entry(session.partition_session_id)
+                .or_insert_with(|| metrics.received_messages(&session.path));
+        }
+        RawFromServer::StopPartitionSessionRequest(request) => {
+            sessions.remove(&request.partition_session_id);
+        }
+        RawFromServer::EndPartitionSession(request) => {
+            sessions.remove(&request.partition_session_id);
+        }
+        RawFromServer::ReadResponse(response) => {
+            match u64::try_from(response.bytes_size) {
+                Ok(bytes) => metrics.received_bytes.increment(bytes),
+                Err(_) => warn!(
+                    bytes_size = response.bytes_size,
+                    "topic reader received a negative response size"
+                ),
+            }
+            for partition in &response.partition_data {
+                if let Some(counter) = sessions.get(&partition.partition_session_id) {
+                    let messages = partition
+                        .batches
+                        .iter()
+                        .map(|batch| batch.message_data.len() as u64)
+                        .sum();
+                    counter.increment(messages);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
