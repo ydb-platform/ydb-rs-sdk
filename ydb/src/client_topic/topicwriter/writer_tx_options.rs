@@ -12,6 +12,10 @@ use crate::{TopicWriterOptions, errors};
 pub struct TopicWriterTxOptions {
     pub topic_path: String,
 
+    /// Optional writer name used in topic metrics.
+    #[builder(setter(into, strip_option), default)]
+    pub(crate) writer_name: Option<String>,
+
     /// Producer identifier used for server-side ordering and deduplication.
     /// When omitted, an empty producer identifier disables server-side deduplication.
     #[builder(setter(into, strip_option), default)]
@@ -46,6 +50,7 @@ impl TopicWriterTxOptions {
         let producer_id = self.producer_id.unwrap_or_default();
         let mut options = TopicWriterOptions::builder()
             .topic_path(self.topic_path)
+            .maybe_writer_name(self.writer_name)
             .producer_id(producer_id)
             .partitioning(self.partitioning)
             // Current WriterTx should not reconnect

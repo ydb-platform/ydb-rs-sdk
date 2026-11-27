@@ -4,9 +4,10 @@ use tokio::sync::Notify;
 use tokio::sync::futures::Notified;
 use tracing::{debug, warn};
 
-use crate::client_topic::topicreader::messages::TopicReaderBatch;
+use crate::client_metrics::names::TopicReaderMetrics;
 #[cfg(test)]
 use crate::client_topic::topicreader::messages::TopicReaderMessage;
+use crate::client_topic::topicreader::messages::{PendingDelivery, TopicReaderBatch};
 use crate::client_topic::topicreader::partition_state::PartitionSession;
 use crate::client_topic::topicreader::reader::TopicReaderCommitMarker;
 use crate::grpc_wrapper::raw_topic_service::common::partition::RawOffsetsRange;
@@ -57,6 +58,7 @@ enum State {
 
 struct Inner {
     state: Mutex<State>,
+    metrics: TopicReaderMetrics,
     messages_available: Notify,
     reader_id: usize,
     reconnect_notify: Notify,
@@ -68,10 +70,11 @@ pub(crate) struct RuntimeHandle {
 }
 
 impl RuntimeHandle {
-    pub(crate) fn new(reader_id: usize) -> Self {
+    pub(crate) fn new(reader_id: usize, metrics: TopicReaderMetrics) -> Self {
         Self {
             inner: Arc::new(Inner {
                 state: Mutex::new(State::Reconnecting),
+                metrics,
                 messages_available: Notify::new(),
                 reader_id,
                 reconnect_notify: Notify::new(),
@@ -84,11 +87,18 @@ impl RuntimeHandle {
         Self {
             inner: Arc::new(Inner {
                 state: Mutex::new(State::Active(Active::new(connection))),
+                metrics: crate::client_metrics::names::MetricsNames::default()
+                    .topics
+                    .reader("consumer", None),
                 messages_available: Notify::new(),
                 reader_id: 0,
                 reconnect_notify: Notify::new(),
             }),
         }
+    }
+
+    pub(crate) fn metrics(&self) -> &TopicReaderMetrics {
+        &self.inner.metrics
     }
 
     pub(crate) fn handle_from_server(&self, msg: RawFromServer) -> YdbResult<()> {
@@ -172,7 +182,7 @@ impl RuntimeHandle {
             return Ok(());
         };
 
-        let session = PartitionSession::from(req);
+        let session = PartitionSession::new(req, self.metrics());
         let partition_session_id = session.partition_session_id;
         active.buffer.start(session)?;
         active
@@ -283,7 +293,7 @@ impl RuntimeHandle {
         Ok(())
     }
 
-    pub(crate) async fn pop_batch(&self, cap: usize) -> YdbResult<TopicReaderBatch> {
+    pub(crate) async fn pop_batch(&self, cap: usize) -> YdbResult<PendingDelivery> {
         if cap == 0 {
             return Err(YdbError::Custom(
                 "topic reader pop_batch called with cap=0".into(),
@@ -308,7 +318,10 @@ impl RuntimeHandle {
 
             if let Some(batch) = batch {
                 self.request_bytes(batch.bytes_to_release, batch.epoch)?;
-                return Ok(TopicReaderBatch::from_messages(batch.messages));
+                return Ok(PendingDelivery {
+                    batch: TopicReaderBatch::from_messages(batch.messages),
+                    delivered_messages: batch.delivered_messages,
+                });
             }
 
             notified.await;
@@ -601,7 +614,12 @@ mod tests {
 
     #[test]
     fn reconnecting_runtime_installs_first_connection() {
-        let runtime = RuntimeHandle::new(0);
+        let runtime = RuntimeHandle::new(
+            0,
+            crate::client_metrics::names::MetricsNames::default()
+                .topics
+                .reader("consumer", None),
+        );
         assert!(runtime.commit(commit_marker(0)).is_err());
 
         let (outgoing_tx, _outgoing_rx) = mpsc::unbounded_channel();
@@ -638,7 +656,11 @@ mod tests {
             .push_batch(vec![TopicReaderMessage::test_message(1, 20)])
             .expect("push should succeed");
 
-        let batch = runtime.pop_batch(10).await.expect("pop should succeed");
+        let batch = runtime
+            .pop_batch(10)
+            .await
+            .expect("pop should succeed")
+            .deliver();
         assert_eq!(batch.messages.len(), 1);
         assert_eq!(batch.messages[0].get_commit_marker().epoch, 1);
     }
@@ -856,7 +878,11 @@ mod tests {
             .push_batch(vec![TopicReaderMessage::test_message(1, 15)])
             .expect("push should succeed");
 
-        let batch = runtime.pop_batch(10).await.expect("pop should succeed");
+        let batch = runtime
+            .pop_batch(10)
+            .await
+            .expect("pop should succeed")
+            .deliver();
         assert_eq!(batch.messages.len(), 1);
     }
 

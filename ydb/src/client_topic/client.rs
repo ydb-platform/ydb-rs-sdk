@@ -4,6 +4,7 @@ use super::topicwriter::writer_tx_options::{TopicWriterTxOptions, TopicWriterTxO
 use crate::YdbError::InternalError;
 use crate::client::TimeoutSettings;
 use crate::client_common::TokenCache;
+use crate::client_metrics::names::TopicMetrics;
 use crate::client_query::Transaction;
 use crate::client_topic::list_types::{AlterConsumer, Consumer, MeteringMode};
 use crate::client_topic::topicreader::reader::{TopicReader, TopicSelectors};
@@ -118,12 +119,34 @@ impl From<UninitializedFieldError> for errors::YdbError {
     }
 }
 
+/// Manages topics and opens readers and writers.
+///
+/// # Message counters
+///
+/// All counters carry `driver_name` (default `main`). Writer counters carry the
+/// configured `topic` path and optional `writer.name`. Reader counters carry
+/// `consumer` and optional `reader.name`. The SDK omits empty name labels.
+/// Both reader message counters carry the `topic` path reported by the
+/// partition session. A read response can contain multiple topics, so its
+/// byte count is scoped to the reader.
+///
+/// | Counter | What it counts |
+/// | --- | --- |
+/// | `ydb.topic.writer.sending.messages` | Messages accepted into the writer queue, once per enqueue. |
+/// | `ydb.topic.writer.sending.bytes` | Original payload bytes of those messages, before compression. |
+/// | `ydb.topic.reader.received.bytes` | Bytes reported by the server, including responses that fail to decode. |
+/// | `ydb.topic.reader.received.messages` | Messages received for open partition sessions before decompression, including redeliveries. |
+/// | `ydb.topic.reader.delivered.messages` | Messages returned to the application. Transactional reads count after offset registration succeeds. |
+///
+/// See the [crate-level metrics guide](crate#metrics) for recorder setup and
+/// Prometheus compatibility.
 #[derive(Clone)]
 pub struct TopicClient {
     timeouts: TimeoutSettings,
     connection_manager: GrpcConnectionManager,
     token_cache: TokenCache,
     executor: Arc<dyn Executor>,
+    metrics: TopicMetrics,
 }
 
 impl TopicClient {
@@ -131,12 +154,14 @@ impl TopicClient {
         connection_manager: GrpcConnectionManager,
         token_cache: TokenCache,
         executor: Arc<dyn Executor>,
+        metrics: TopicMetrics,
     ) -> Self {
         Self {
             timeouts: TimeoutSettings::default(),
             connection_manager,
             token_cache,
             executor,
+            metrics,
         }
     }
 
@@ -228,6 +253,7 @@ impl TopicClient {
             self.connection_manager.clone(),
             self.token_cache.clone(),
             self.executor.clone(),
+            &self.metrics,
         )
         .await
     }
@@ -242,6 +268,7 @@ impl TopicClient {
             self.connection_manager.clone(),
             self.token_cache.clone(),
             self.executor.clone(),
+            &self.metrics,
         )
         .await
     }
@@ -255,6 +282,7 @@ impl TopicClient {
             writer_options,
             self.connection_manager.clone(),
             self.executor.clone(),
+            &self.metrics,
         )
         .await
     }
@@ -279,6 +307,7 @@ impl TopicClient {
             writer_tx_options,
             self.connection_manager.clone(),
             self.executor.clone(),
+            &self.metrics,
             tx,
         )
         .await
@@ -290,6 +319,7 @@ impl TopicClient {
             TopicWriterOptions::builder().topic_path(path).build(),
             self.connection_manager.clone(),
             self.executor.clone(),
+            &self.metrics,
         )
         .await
     }

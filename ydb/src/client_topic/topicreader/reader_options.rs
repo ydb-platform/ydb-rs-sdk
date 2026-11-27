@@ -17,6 +17,10 @@ pub struct TopicReaderOptions {
     #[builder(into)]
     pub(crate) topic: TopicSelectors,
 
+    /// Optional reader name sent to the server and used in topic metrics.
+    #[builder(into)]
+    pub(crate) reader_name: Option<String>,
+
     // internal tuning
     #[builder(default = 1000)]
     pub(crate) batch_size: usize,

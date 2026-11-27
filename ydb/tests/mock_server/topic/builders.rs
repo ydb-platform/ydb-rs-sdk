@@ -77,10 +77,13 @@ pub fn read_response_with_codec(
     data: impl Into<Vec<u8>>,
     codec: ydb::Codec,
 ) -> TopicReply {
+    let data = data.into();
+    let bytes_size = data.len() as i64;
     read_response_batch_with_codec(
         stream_id,
         partition_session_id,
-        vec![(offset, uncompressed_size, data.into())],
+        bytes_size,
+        vec![(offset, uncompressed_size, data)],
         codec,
     )
 }
@@ -88,6 +91,7 @@ pub fn read_response_with_codec(
 pub fn read_response_batch_with_codec(
     stream_id: u64,
     partition_session_id: i64,
+    bytes_size: i64,
     messages: Vec<(i64, i64, Vec<u8>)>,
     codec: ydb::Codec,
 ) -> TopicReply {
@@ -105,11 +109,6 @@ pub fn read_response_batch_with_codec(
             },
         )
         .collect::<Vec<_>>();
-
-    let bytes_size = message_data
-        .iter()
-        .map(|message| message.data.len() as i64)
-        .sum();
 
     stream_read(
         stream_id,
@@ -215,7 +214,10 @@ pub fn empty_with_status(stream_id: u64, status: StatusCode) -> TopicReply {
     }
 }
 
-fn stream_read(stream_id: u64, msg: stream_read_message::from_server::ServerMessage) -> TopicReply {
+pub fn stream_read(
+    stream_id: u64,
+    msg: stream_read_message::from_server::ServerMessage,
+) -> TopicReply {
     TopicReply::StreamRead {
         stream_id,
         msg: stream_read_message::FromServer {
@@ -327,10 +329,10 @@ pub fn unary_commit_offset_response() -> TopicReply {
     })
 }
 
-pub fn update_offsets_in_transaction_response() -> TopicReply {
-    TopicReply::UpdateOffsetsInTransaction(topic::UpdateOffsetsInTransactionResponse {
+pub fn update_offsets_in_transaction_response() -> topic::UpdateOffsetsInTransactionResponse {
+    topic::UpdateOffsetsInTransactionResponse {
         operation: Some(success_operation()),
-    })
+    }
 }
 
 pub fn create_topic_response() -> TopicReply {

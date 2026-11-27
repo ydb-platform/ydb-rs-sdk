@@ -8,6 +8,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::{instrument, trace};
 
+use crate::client_metrics::names::TopicMetrics;
 use crate::client_topic::compression::Executor;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
 use crate::client_topic::topicwriter::message_write_status::{
@@ -50,20 +51,23 @@ impl TopicWriter {
         writer_options: TopicWriterOptions,
         connection_manager: GrpcConnectionManager,
         executor: Arc<dyn Executor>,
+        metrics: &TopicMetrics,
     ) -> YdbResult<Self> {
-        Self::new_inner(writer_options, connection_manager, executor, None).await
+        Self::new_inner(writer_options, connection_manager, executor, metrics, None).await
     }
 
     pub(crate) async fn with_tx_identity(
         writer_options: TopicWriterOptions,
         connection_manager: GrpcConnectionManager,
         executor: Arc<dyn Executor>,
+        metrics: &TopicMetrics,
         tx_identity: TransactionIdentity,
     ) -> YdbResult<Self> {
         Self::new_inner(
             writer_options,
             connection_manager,
             executor,
+            metrics,
             Some(tx_identity),
         )
         .await
@@ -73,8 +77,13 @@ impl TopicWriter {
         writer_options: TopicWriterOptions,
         connection_manager: GrpcConnectionManager,
         executor: Arc<dyn Executor>,
+        metrics: &TopicMetrics,
         tx_identity: Option<TransactionIdentity>,
     ) -> YdbResult<Self> {
+        let metrics = metrics.writer(
+            &writer_options.topic_path,
+            writer_options.writer_name.as_deref(),
+        );
         let producer_id = writer_options
             .producer_id
             .clone()
@@ -100,6 +109,7 @@ impl TopicWriter {
             retry_settings: retrier,
             fatal_error_tx,
             executor,
+            metrics,
             tx_identity,
             status_validator,
         })

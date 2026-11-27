@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, instrument, warn};
 
 use crate::client_common::TokenCache;
+use crate::client_metrics::names::TopicReaderMetrics;
 use crate::client_topic::compression::Executor;
 use crate::errors::Idempotency;
 use crate::grpc_connection_manager::GrpcConnectionManager;
@@ -76,8 +77,9 @@ impl Reconnector {
         compression_executor: Arc<dyn Executor>,
         cancellation_token: CancellationToken,
         reader_id: usize,
+        metrics: TopicReaderMetrics,
     ) -> Self {
-        let runtime = runtime::RuntimeHandle::new(reader_id);
+        let runtime = runtime::RuntimeHandle::new(reader_id, metrics);
 
         Self {
             manager,
@@ -230,7 +232,7 @@ impl Reconnector {
         let auth_token_sender = AuthTokenSender::new(attempt_ctx, outgoing_tx);
 
         let mut tasks: JoinSet<YdbResult<()>> = JoinSet::new();
-        tasks.spawn(grpc.run());
+        tasks.spawn(grpc.run(runtime.metrics().clone()));
         tasks.spawn(decompressor.run());
         tasks.spawn(auth_token_sender.run());
 

@@ -13,6 +13,7 @@ use super::round_robin::RoundRobin;
 pub(super) struct BufferedBatch {
     pub(super) messages: Vec<TopicReaderMessage>,
     pub(super) bytes_to_release: i64,
+    pub(super) delivered_messages: metrics::Counter,
     pub(super) epoch: usize,
 }
 
@@ -77,6 +78,7 @@ impl PartitionEntry {
             messages,
             bytes_to_release,
             epoch: first_epoch,
+            delivered_messages: self.session.delivered_messages.clone(),
         })
     }
 }
@@ -364,6 +366,7 @@ mod tests {
 
     fn session(partition_session_id: i64, partition_id: i64) -> PartitionSession {
         PartitionSession {
+            delivered_messages: metrics::Counter::noop(),
             partition_session_id: psid(partition_session_id),
             partition_id: pid(partition_id),
             topic: String::new(),

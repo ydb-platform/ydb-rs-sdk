@@ -8,6 +8,19 @@ use crate::grpc_wrapper::raw_topic_service::stream_read::messages::RawBatch;
 use std::time;
 use std::time::SystemTime;
 
+pub(super) struct PendingDelivery {
+    pub(super) batch: TopicReaderBatch,
+    pub(super) delivered_messages: metrics::Counter,
+}
+
+impl PendingDelivery {
+    pub(super) fn deliver(self) -> TopicReaderBatch {
+        self.delivered_messages
+            .increment(self.batch.messages.len() as u64);
+        self.batch
+    }
+}
+
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 #[derive(Debug)]
 pub struct TopicReaderBatch {
@@ -207,6 +220,7 @@ mod tests {
     #[test]
     fn topic_reader_batch_new() {
         let mut partition_session = PartitionSession {
+            delivered_messages: metrics::Counter::noop(),
             partition_session_id: PartitionSessionId::from_raw(123),
             partition_id: PartitionId::from_raw(456),
             topic: "test-topic".to_string(),
@@ -249,6 +263,7 @@ mod tests {
     #[test]
     fn bytes_to_release_default_zero() {
         let mut partition_session = PartitionSession {
+            delivered_messages: metrics::Counter::noop(),
             partition_session_id: PartitionSessionId::from_raw(1),
             partition_id: PartitionId::from_raw(2),
             topic: "t".to_string(),
@@ -285,6 +300,7 @@ mod tests {
     #[test]
     fn from_messages_commit_marker_spans_first_to_last() {
         let mut partition_session = PartitionSession {
+            delivered_messages: metrics::Counter::noop(),
             partition_session_id: PartitionSessionId::from_raw(7),
             partition_id: PartitionId::from_raw(42),
             topic: "t-from-messages".to_string(),

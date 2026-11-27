@@ -19,6 +19,161 @@ use ydb_grpc::ydb_proto::topic::stream_read_message;
 use ydb_grpc::ydb_proto::topic::stream_read_message::init_request::TopicReadSettings;
 use ydb_grpc::ydb_proto::topic::v1::topic_service_client::TopicServiceClient;
 
+#[path = "../tests/support/topic_prometheus.rs"]
+mod topic_prometheus;
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn topic_message_counters_round_trip() -> YdbResult<()> {
+    const DRIVER: &str = "topic-counter-test";
+    const CONSUMER: &str = "reader";
+    const READER_LABELS: &[(&str, &str)] =
+        &[("consumer", CONSUMER), ("reader_name", "round-trip-reader")];
+    let topics_and_messages: [(&str, i64, &[&[u8]]); 2] = [
+        ("topic_message_counters_orders", 0, &[b"abc", b"12345"]),
+        ("topic_message_counters_payments", 1, &[b"goodbye"]),
+    ];
+    let exporter = topic_prometheus::TopicPrometheus::new(DRIVER);
+    let _guard = exporter.install_local();
+    let client = crate::test_helpers::test_client_builder()
+        .with_driver_name(DRIVER)
+        .build()
+        .await?;
+    let mut topics = client.topic_client();
+    let database = client.database();
+    let entries = client
+        .scheme_client()
+        .list_directory(database.clone())
+        .await?;
+    let mut selectors = Vec::new();
+
+    for (topic, partition, payloads) in topics_and_messages {
+        let path = format!("{database}/{topic}");
+        if entries.iter().any(|e| e.name == topic) {
+            topics.drop_topic(path.clone()).await?;
+        }
+        topics
+            .create_topic(
+                path,
+                CreateTopicOptionsBuilder::default()
+                    .min_active_partitions(partition + 1)
+                    .partition_count_limit(partition + 1)
+                    .consumers(vec![
+                        ConsumerBuilder::default()
+                            .name(CONSUMER.to_owned())
+                            .build()?,
+                    ])
+                    .build()?,
+            )
+            .await?;
+        let labels = &[("writer_name", "round-trip-writer"), ("topic", topic)];
+        assert_eq!(
+            exporter.sample("ydb_topic_writer_sending_messages", labels),
+            None
+        );
+        let writer = topics
+            .create_writer_with_params(
+                TopicWriterOptions::builder()
+                    .topic_path(topic)
+                    .writer_name("round-trip-writer")
+                    .partitioning(PartitioningStrategy::PartitionId(partition))
+                    .codec_selector(crate::CodecSelection::Fixed(Codec::RAW))
+                    .build(),
+            )
+            .await?;
+        for &payload in payloads {
+            timeout(
+                Duration::from_secs(60),
+                writer.write_with_ack(TopicWriterMessage::new(payload)),
+            )
+            .await
+            .expect("timeout waiting for write ACK")?;
+        }
+        writer.stop().await?;
+        let bytes = payloads.iter().map(|p| p.len() as u64).sum();
+        assert_eq!(
+            exporter.sample("ydb_topic_writer_sending_messages", labels),
+            Some(payloads.len() as u64)
+        );
+        assert_eq!(
+            exporter.sample("ydb_topic_writer_sending_bytes", labels),
+            Some(bytes)
+        );
+        selectors.push(
+            crate::TopicSelector::builder()
+                .path(topic)
+                .partition_ids(vec![partition])
+                .build(),
+        );
+    }
+
+    assert_eq!(
+        exporter.sample("ydb_topic_reader_received_bytes", READER_LABELS),
+        None
+    );
+    let mut reader = topics
+        .create_reader_with_params(
+            crate::TopicReaderOptions::builder()
+                .consumer(CONSUMER)
+                .reader_name("round-trip-reader")
+                .topic(crate::TopicSelectors(selectors))
+                .batch_size(1)
+                .build(),
+        )
+        .await?;
+    let mut delivered = [0; 2];
+    let mut response_bytes = 0;
+    for _ in 0..3 {
+        let mut batch = timeout(Duration::from_secs(60), reader.read_batch())
+            .await
+            .expect("timeout waiting for topic message")?;
+        let index = usize::try_from(batch.partition_id()).unwrap();
+        let (topic, _, payloads) = topics_and_messages[index];
+        let session_topic = batch.get_commit_marker().topic;
+        assert_eq!(session_topic.rsplit('/').next(), Some(topic));
+        let labels = &[
+            READER_LABELS[0],
+            READER_LABELS[1],
+            ("topic", &session_topic),
+        ];
+        let [message] = batch.messages.as_mut_slice() else {
+            panic!("expected a single message")
+        };
+        assert_eq!(message.offset, delivered[index] as i64);
+        assert_eq!(
+            message.read_and_take().await?.as_deref(),
+            Some(payloads[delivered[index]])
+        );
+        // Flow control returns the server's ReadResponse.bytes_size on its last message.
+        response_bytes += u64::try_from(message.bytes_to_release).unwrap();
+        delivered[index] += 1;
+        let count = Some(delivered[index] as u64);
+        assert_eq!(
+            exporter.sample("ydb_topic_reader_delivered_messages", labels),
+            count
+        );
+        if delivered[index] == payloads.len() {
+            assert_eq!(
+                exporter.sample("ydb_topic_reader_received_messages", labels),
+                count
+            );
+        }
+    }
+    assert_eq!(delivered, [2, 1]);
+    assert!(response_bytes > 0);
+    assert_eq!(
+        exporter.sample("ydb_topic_reader_received_bytes", READER_LABELS),
+        Some(response_bytes)
+    );
+    info!(
+        ?delivered,
+        response_bytes, "topic counters after writing and reading"
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 #[traced_test]
 #[ignore] // need YDB access
