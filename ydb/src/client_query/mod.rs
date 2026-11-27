@@ -168,14 +168,16 @@ impl QueryClient {
         session_pool: SessionPool,
         retry_settings: RetrySettings,
         metrics_names: MetricsNames,
+        lifecycle: &crate::driver_lifecycle::DriverLifecycle,
     ) -> Self {
         Self {
-            ctx: ClientExecContext {
+            ctx: ClientExecContext::new(
                 connection_manager,
                 session_pool,
                 retry_settings,
                 metrics_names,
-            },
+                lifecycle,
+            ),
         }
     }
 
@@ -293,10 +295,8 @@ impl QueryClient {
         T: Send,
     {
         ensure_interactive_tx_mode(options.mode())?;
-        let result = self
-            .ctx
-            .retry_settings
-            .clone()
+        let retry_settings = self.ctx.access()?.retry_settings.clone();
+        let result = retry_settings
             .with_deadline(wall_timeout)
             .retry(closure!(
                 [&client = self, callback, &options],
@@ -332,9 +332,10 @@ impl QueryClient {
         options: TransactionOptions,
         retry_deadline: Option<Instant>,
     ) -> YdbResult<Transaction> {
-        let lease = self.ctx.session_pool.acquire_explicit().await?;
+        let lease = self.ctx.access()?.session_pool.acquire_explicit().await?;
         let query_client = match self
             .ctx
+            .access()?
             .connection_manager
             .get_auth_service_to_node(RawQueryClient::new, lease.node_uri())
             .await
@@ -585,6 +586,7 @@ mod unit_tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use crate::GrpcOptions;
+    use crate::driver_lifecycle::DriverLifecycle;
     use crate::errors::YdbStatusError;
     use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
     use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
@@ -597,6 +599,12 @@ mod unit_tests {
     use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
     use builders::{exactly_one_set, take_single_row};
+
+    fn test_driver_lifecycle() -> DriverLifecycle {
+        let mut lifecycle = DriverLifecycle::new();
+        lifecycle.complete_shutdown();
+        lifecycle
+    }
 
     struct AbortCounterHook(Arc<AtomicUsize>);
 
@@ -691,6 +699,7 @@ mod unit_tests {
             pool.clone(),
             RetrySettings::dont_retry(),
             MetricsNames::new(None),
+            &test_driver_lifecycle(),
         );
         let observed_pool = pool.clone();
 
@@ -716,6 +725,7 @@ mod unit_tests {
             pool,
             RetrySettings::dont_retry(),
             MetricsNames::new(None),
+            &test_driver_lifecycle(),
         );
         let callback_called = Arc::new(AtomicBool::new(false));
         let observed_called = callback_called.clone();
@@ -742,6 +752,7 @@ mod unit_tests {
             pool,
             RetrySettings::dont_retry(),
             MetricsNames::new(None),
+            &test_driver_lifecycle(),
         );
         let callback_called = Arc::new(AtomicBool::new(false));
 
@@ -781,6 +792,7 @@ mod unit_tests {
             pool,
             RetrySettings::with_default_backoff(),
             MetricsNames::new(None),
+            &test_driver_lifecycle(),
         );
         let callback_calls = Arc::new(AtomicUsize::new(0));
         let observed_calls = callback_calls.clone();
