@@ -694,7 +694,9 @@ mod tests {
                 panic!("runtime should be active");
             };
             // Corrupt mapping so stop() returns an internal consistency error.
-            active.buffer.replace_partition_mapping(pid(20), psid(20));
+            active
+                .buffer
+                .replace_partition_mapping("test", pid(20), psid(20));
         }
 
         let req = RawStopPartitionSessionRequest {
