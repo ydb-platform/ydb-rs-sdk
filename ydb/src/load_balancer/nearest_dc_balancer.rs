@@ -6,7 +6,7 @@ use std::{
 
 use http::Uri;
 use itertools::Itertools;
-use rand::{seq::SliceRandom, thread_rng};
+use rand::seq::{IndexedRandom, SliceRandom};
 use std::sync::RwLock;
 use std::time::Duration;
 use tokio::{
@@ -149,7 +149,7 @@ impl NearestDCBalancer {
                 if let Some(node) = state_guard
                     .borrow()
                     .preferred_endpoints
-                    .choose(&mut thread_rng())
+                    .choose(&mut rand::rng())
                 {
                     return YdbResult::Ok(node.uri.clone());
                 }
@@ -259,7 +259,7 @@ impl NearestDCBalancer {
     pub(super) fn get_random_endpoints<'a>(
         dc_endpoints: &'a mut Vec<&'a NodeInfo>,
     ) -> &'a mut Vec<&'a NodeInfo> {
-        dc_endpoints.shuffle(&mut thread_rng());
+        dc_endpoints.shuffle(&mut rand::rng());
         dc_endpoints.truncate(NODES_PER_DC);
         dc_endpoints
     }

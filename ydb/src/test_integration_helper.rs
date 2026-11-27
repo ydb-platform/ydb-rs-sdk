@@ -4,8 +4,6 @@ use crate::errors::{YdbError, YdbResult};
 use crate::session_pool::SessionPoolSettings;
 use crate::test_helpers::test_custom_ca_client_builder;
 use crate::test_helpers::{test_client_builder, test_with_password_builder};
-use async_once::AsyncOnce;
-use lazy_static::lazy_static;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -29,19 +27,12 @@ impl Executor for InplaceExecutor {
     }
 }
 
-lazy_static! {
-    static ref TEST_CLIENT: AsyncOnce<Arc<Client>> = AsyncOnce::new(async {
-        trace!("create client");
-        connect(Arc::new(InplaceExecutor)).await.unwrap()
-    });
-}
-
 pub(crate) async fn create_client_with_executor(
     executor: Arc<dyn Executor>,
 ) -> YdbResult<Arc<Client>> {
     trace!("get client");
-    // https://github.com/ydb-platform/ydb-rs-sdk/issues/92
-    // return Ok(TEST_CLIENT.get().await.clone());
+    // A connection per call rather than one shared across the suite, pending
+    // https://github.com/ydb-platform/ydb-rs-sdk/issues/92.
     connect(executor).await
 }
 
