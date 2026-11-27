@@ -2,6 +2,7 @@ use crate::closure;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
 use crate::test_integration_helper::create_client;
 use crate::{Transaction, TxMode};
+use std::cmp::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing_test::traced_test;
 
@@ -152,6 +153,79 @@ macro_rules! interactive_mode_select {
 
 interactive_mode_select!(query_tx_serializable_rw, TxMode::SerializableReadWrite);
 interactive_mode_select!(query_tx_snapshot_ro, TxMode::SnapshotReadOnly);
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB with strict serializable isolation enabled
+async fn query_tx_strict_serializable_commit_timestamps() -> YdbResult<()> {
+    let client = create_client().await?;
+    let mut qc = client.query_client();
+    let table_name = unique_table_name("strict_serializable_tx");
+    idem!(qc.exec(format!(
+        "CREATE TABLE {table_name} (id Int64, val Int64, PRIMARY KEY(id))"
+    )))
+    .await?;
+
+    let explicit = qc
+        .retry_tx(closure!([&table_name], async |tx: &mut Transaction| {
+            tx.exec(format!("UPSERT INTO {table_name} (id, val) VALUES (1, 11)"))
+                .await?;
+            Ok(tx
+                .commit_with_timestamp()
+                .await?
+                .expect("explicit commit timestamp"))
+        }))
+        .isolation(TxMode::StrictSerializableRW)
+        .timeout(TEST_TIMEOUT)
+        .await
+        .map_err(customer_err)?;
+
+    let inline = qc
+        .retry_tx(closure!([&table_name], async |tx: &mut Transaction| {
+            let mut stream = tx
+                .query(format!(
+                    "UPSERT INTO {table_name} (id, val) VALUES (2, 22); SELECT 42 AS marker"
+                ))
+                .with_commit(true)
+                .await?;
+            let set = stream.next_result_set().await?.expect("query result");
+            let mut row = set.rows().next().expect("marker row");
+            let marker: i64 = row.remove_field_by_name("marker")?.try_into()?;
+            assert_eq!(marker, 42);
+            assert!(stream.next_result_set().await?.is_none());
+            Ok(stream
+                .close_with_commit_timestamp()
+                .await?
+                .expect("inline commit timestamp"))
+        }))
+        .isolation(TxMode::StrictSerializableRW)
+        .timeout(TEST_TIMEOUT)
+        .await
+        .map_err(customer_err)?;
+
+    assert!(explicit.plan_step() > 0 && explicit.tx_id() > 0);
+    assert!(inline.plan_step() > 0 && inline.tx_id() > 0);
+    assert_eq!(explicit.compare(&inline)?, Ordering::Less);
+
+    let read_only = idem!(
+        qc.exec("SELECT 1")
+            .with_tx_mode(TxMode::StrictSerializableRW)
+    )
+    .execute_with_commit_timestamp()
+    .await?;
+    assert!(read_only.is_none());
+
+    let result =
+        idem!(qc.query_result_set(format!("SELECT val FROM {table_name} ORDER BY id"))).await?;
+    let values: Vec<Option<i64>> = result
+        .rows()
+        .map(|mut row| row.remove_field_by_name("val")?.try_into())
+        .collect::<YdbResult<_>>()?;
+    assert_eq!(values, vec![Some(11), Some(22)]);
+
+    idem!(qc.exec(format!("DROP TABLE {table_name}"))).await?;
+    Ok(())
+}
 
 #[tokio::test]
 #[traced_test]

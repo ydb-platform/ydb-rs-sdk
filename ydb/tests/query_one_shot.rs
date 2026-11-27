@@ -31,6 +31,7 @@ fn success_part(tx_id: Option<&str>) -> ExecuteQueryResponsePart {
         result_set: None,
         exec_stats: None,
         tx_meta: tx_id.map(|id| TransactionMeta { id: id.to_owned() }),
+        ..Default::default()
     }
 }
 

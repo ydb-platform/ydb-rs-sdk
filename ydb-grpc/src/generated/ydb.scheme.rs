@@ -79,6 +79,9 @@ pub struct Entry {
     /// Virtual timestamp when the object was created
     #[prost(message, optional, tag = "9")]
     pub created_at: ::core::option::Option<super::VirtualTimestamp>,
+    /// When true, permissions are not inherited from parent objects
+    #[prost(bool, tag = "10")]
+    pub interrupt_permission_inheritance: bool,
 }
 /// Nested message and enum types in `Entry`.
 pub mod entry {
@@ -115,6 +118,7 @@ pub mod entry {
         ResourcePool = 21,
         Transfer = 23,
         SysView = 24,
+        Secret = 25,
     }
     impl Type {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -141,6 +145,7 @@ pub mod entry {
                 Self::ResourcePool => "RESOURCE_POOL",
                 Self::Transfer => "TRANSFER",
                 Self::SysView => "SYS_VIEW",
+                Self::Secret => "SECRET",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -165,6 +170,7 @@ pub mod entry {
                 "RESOURCE_POOL" => Some(Self::ResourcePool),
                 "TRANSFER" => Some(Self::Transfer),
                 "SYS_VIEW" => Some(Self::SysView),
+                "SECRET" => Some(Self::Secret),
                 _ => None,
             }
         }

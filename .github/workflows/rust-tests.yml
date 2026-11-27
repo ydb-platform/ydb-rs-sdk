@@ -68,6 +68,19 @@ jobs:
       with:
         submodules: true
 
+    - name: Enable strict serializable isolation
+      run: |
+        docker exec -i ydb bash -ec 'cat > /tmp/strict-serializable.pb.txt
+        /ydbd -s localhost:2136 admin console configs update /tmp/strict-serializable.pb.txt' <<'PROTO'
+        Actions {
+          AddConfigItem {
+            ConfigItem {
+              Config { TableServiceConfig { EnableStrictSerializableIsolation: true } }
+            }
+          }
+        }
+        PROTO
+
     - name: Update dependencies to latest compatible versions
       if: ${{ matrix.latest_deps }}
       run: |
