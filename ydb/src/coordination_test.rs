@@ -333,3 +333,62 @@ async fn describe_semaphore_test() -> YdbResult<()> {
     lease_3.release();
     Ok(())
 }
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn dropped_session_releases_what_it_holds_test() -> YdbResult<()> {
+    let client = create_client().await?;
+    let database_path = client.database();
+    let node_name = "test_dropped_session".to_string();
+    let node_path = format!("{database_path}/{node_name}");
+
+    let mut coordination_client = client.coordination_client();
+
+    let _ = coordination_client.drop_node(node_path.clone()).await;
+
+    coordination_client
+        .create_node(node_path.clone(), NodeConfigBuilder::default().build()?)
+        .await?;
+
+    // Far longer than the waiter's acquire below, so only stopping the
+    // dropped session, not its expiry, can free the semaphore in time.
+    let session_options = SessionOptionsBuilder::default()
+        .timeout(Duration::from_secs(60))
+        .build()?;
+
+    let holder = coordination_client
+        .create_session(node_path.clone(), session_options.clone())
+        .await?;
+    let lease = holder
+        .acquire_semaphore_with_params(
+            "dropped-holder",
+            u64::MAX,
+            AcquireOptionsBuilder::default().ephemeral(true).build()?,
+        )
+        .await?;
+    // Leak the guard, so that only the end of the session releases the semaphore.
+    std::mem::forget(lease);
+    drop(holder);
+
+    let waiter = coordination_client
+        .create_session(node_path, session_options)
+        .await?;
+    let acquired = waiter
+        .acquire_semaphore_with_params(
+            "dropped-holder",
+            u64::MAX,
+            AcquireOptionsBuilder::default()
+                .ephemeral(true)
+                .timeout(Duration::from_secs(10))
+                .build()?,
+        )
+        .await;
+
+    assert!(
+        acquired.is_ok(),
+        "the dropped session still holds the semaphore: {:?}",
+        acquired.err()
+    );
+    Ok(())
+}
