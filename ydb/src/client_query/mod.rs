@@ -34,7 +34,6 @@ use std::time::{Duration, Instant};
 use http::Uri;
 use tracing::instrument;
 
-use crate::client_metrics::names::MetricsNames;
 use crate::client_query::exec::TxState;
 use crate::closure;
 use crate::errors::{
@@ -167,14 +166,14 @@ impl QueryClient {
         connection_manager: GrpcConnectionManager,
         session_pool: SessionPool,
         retry_settings: RetrySettings,
-        metrics_names: MetricsNames,
+        metrics: Telemetry,
     ) -> Self {
         Self {
             ctx: ClientExecContext {
                 connection_manager,
                 session_pool,
                 retry_settings,
-                metrics_names,
+                metrics,
             },
         }
     }
@@ -348,7 +347,7 @@ impl QueryClient {
             lease,
             options,
             retry_deadline,
-            self.ctx.metrics_names.clone(),
+            self.ctx.metrics.clone(),
         ))
     }
 
@@ -458,7 +457,6 @@ impl QueryExecutor for QueryClient {
     }
 
     fn query_row(&mut self, text: impl Into<String>) -> QueryRowBuilder<'_, Row, Self::Scope> {
-        self.ctx.metrics_names.client_query_row_counter.increment(1);
         QueryClient::query_row(self, text)
     }
 }
@@ -475,10 +473,10 @@ impl Transaction {
         lease: crate::session_pool::SessionPoolLease,
         options: TransactionOptions,
         retry_deadline: Option<Instant>,
-        metrics_names: MetricsNames,
+        metrics: Telemetry,
     ) -> Self {
         Self {
-            ctx: tx_exec_context(query_client, lease, options, retry_deadline, metrics_names),
+            ctx: tx_exec_context(query_client, lease, options, retry_deadline, metrics),
         }
     }
 
@@ -543,10 +541,6 @@ impl QueryExecutor for Transaction {
     type Scope = builders::Interactive;
 
     fn exec(&mut self, text: impl Into<String>) -> ExecBuilder<'_, Self::Scope> {
-        self.ctx
-            .metrics_names
-            .client_transaction_exec_counter
-            .increment(1);
         Transaction::exec(self, text)
     }
 
@@ -559,14 +553,11 @@ impl QueryExecutor for Transaction {
     }
 
     fn query_row(&mut self, text: impl Into<String>) -> QueryRowBuilder<'_, Row, Self::Scope> {
-        self.ctx
-            .metrics_names
-            .client_transaction_query_row_counter
-            .increment(1);
         Transaction::query_row(self, text)
     }
 }
 
+use crate::observability::telemetry::Telemetry;
 pub use builders::{
     CallBuilder, ClientOneShot, ExecBuilder, ExecCall, Interactive, OneResultSet, OneRow,
     OptionalRow, OptionalRowBuilder, QueryExecutor, QueryRowBuilder, QueryStreamBuilder,
@@ -647,7 +638,7 @@ mod unit_tests {
             lease,
             TransactionOptions::default(),
             None,
-            MetricsNames::new(None),
+            Telemetry::new_for_test(),
         )
     }
 
@@ -690,7 +681,7 @@ mod unit_tests {
             test_connection_manager(),
             pool.clone(),
             RetrySettings::dont_retry(),
-            MetricsNames::new(None),
+            Telemetry::new_for_test(),
         );
         let observed_pool = pool.clone();
 
@@ -715,7 +706,7 @@ mod unit_tests {
             test_connection_manager(),
             pool,
             RetrySettings::dont_retry(),
-            MetricsNames::new(None),
+            Telemetry::new_for_test(),
         );
         let callback_called = Arc::new(AtomicBool::new(false));
         let observed_called = callback_called.clone();
@@ -741,7 +732,7 @@ mod unit_tests {
             test_connection_manager(),
             pool,
             RetrySettings::dont_retry(),
-            MetricsNames::new(None),
+            Telemetry::new_for_test(),
         );
         let callback_called = Arc::new(AtomicBool::new(false));
 
@@ -780,7 +771,7 @@ mod unit_tests {
             test_connection_manager(),
             pool,
             RetrySettings::with_default_backoff(),
-            MetricsNames::new(None),
+            Telemetry::new_for_test(),
         );
         let callback_calls = Arc::new(AtomicUsize::new(0));
         let observed_calls = callback_calls.clone();
