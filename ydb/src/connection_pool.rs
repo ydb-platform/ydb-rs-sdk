@@ -317,6 +317,10 @@ pub fn endpoint(uri: Uri, original_uri: Option<&Uri>, opts: &GrpcOptions) -> Ydb
         endpoint = endpoint.http2_keep_alive_interval(interval);
     }
 
+    if let Some(timeout) = opts.connect_timeout {
+        endpoint = endpoint.connect_timeout(timeout);
+    }
+
     if need_tls {
         let domain = original_uri
             .unwrap_or(&uri)
@@ -365,7 +369,53 @@ pub fn configure_tls_endpoint(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
+
+    #[test]
+    fn test_endpoint_has_default_connect_timeout() -> YdbResult<()> {
+        for uri in ["http://ydb.local:2136", "https://ydb.local:2135"] {
+            let endpoint = endpoint(Uri::from_static(uri), None, &GrpcOptions::default())?;
+
+            assert_eq!(
+                endpoint.get_connect_timeout(),
+                Some(Duration::from_secs(5)),
+                "{uri}"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_endpoint_has_configured_connect_timeout() -> YdbResult<()> {
+        let opts = GrpcOptions {
+            connect_timeout: Some(Duration::from_millis(1500)),
+            ..GrpcOptions::default()
+        };
+
+        let endpoint = endpoint(Uri::from_static("http://ydb.local:2136"), None, &opts)?;
+
+        assert_eq!(
+            endpoint.get_connect_timeout(),
+            Some(Duration::from_millis(1500))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_endpoint_without_connect_timeout() -> YdbResult<()> {
+        let opts = GrpcOptions {
+            connect_timeout: None,
+            ..GrpcOptions::default()
+        };
+
+        let endpoint = endpoint(Uri::from_static("http://ydb.local:2136"), None, &opts)?;
+
+        assert_eq!(endpoint.get_connect_timeout(), None);
+        Ok(())
+    }
 
     #[test]
     fn test_ip_addr_to_authority_ipv4() -> YdbResult<()> {

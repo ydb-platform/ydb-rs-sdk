@@ -549,6 +549,31 @@ mod test {
     }
 
     #[test]
+    fn connect_timeout_is_five_seconds_by_default() -> YdbResult<()> {
+        let builder = ClientBuilder::new_from_connection_string("grpc://ydb.local:123/database")?;
+
+        assert_eq!(
+            builder.grpc_opts.connect_timeout,
+            Some(Duration::from_secs(5))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn connect_timeout_can_be_changed_and_turned_off() -> YdbResult<()> {
+        let builder = ClientBuilder::new_from_connection_string("grpc://ydb.local:123/database")?
+            .with_grpc_connect_timeout(Duration::from_secs(2));
+        assert_eq!(
+            builder.grpc_opts.connect_timeout,
+            Some(Duration::from_secs(2))
+        );
+
+        let builder = builder.with_grpc_connect_timeout(None);
+        assert_eq!(builder.grpc_opts.connect_timeout, None);
+        Ok(())
+    }
+
+    #[test]
     fn grpc_opts_can_be_set() {
         let path = std::env::temp_dir().join(format!("ydb-test-cert-{}.pem", std::process::id()));
 
@@ -561,6 +586,7 @@ mod test {
         ClientBuilder::new_from_connection_string("grpc://ydb.local:123/database")
             .unwrap()
             .with_grpc_keepalive_interval(Duration::from_secs(5))
+            .with_grpc_connect_timeout(Duration::from_secs(3))
             .with_grpc_max_message_size(10)
             .load_certificate(&path)
             .unwrap();
