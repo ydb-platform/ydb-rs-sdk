@@ -197,7 +197,6 @@ impl RuntimeHandle {
             graceful, committed_offset, "topic reader received stop partition session request"
         );
 
-        let mut stop_error: Option<YdbError> = None;
         {
             let mut state = self.lock_state()?;
             let State::Active(active) = &mut *state else {
@@ -209,15 +208,15 @@ impl RuntimeHandle {
             // now, deliberately ignore `graceful` and remove the session immediately.
             // The server may later send a non-graceful stop; acknowledge it again if it
             // arrives. Other messages for unknown sessions indicate desynchronization.
-            if active.buffer.is_active_session(partition_session_id) {
-                stop_error = active.buffer.stop(partition_session_id).err().map(|err| {
+            let stop_result = if active.buffer.is_active_session(partition_session_id) {
+                let stop_result = active.buffer.stop(partition_session_id).inspect_err(|err| {
                     warn!(
                         %partition_session_id,
                         error = %err,
                         "topic reader failed to stop partition session in buffer, still sending response"
                     );
-                    err
                 });
+
                 active.pending_commits.stop(
                     partition_session_id,
                     Some(committed_offset),
@@ -225,13 +224,17 @@ impl RuntimeHandle {
                         "partition session stopped by server: {partition_session_id}"
                     )),
                 );
+
+                stop_result
             } else {
                 debug!(
                     %partition_session_id,
                     committed_offset,
                     "topic reader stop partition session request for inactive session"
                 );
-            }
+
+                Ok(0)
+            };
 
             active
                 .connection
@@ -240,10 +243,19 @@ impl RuntimeHandle {
                         partition_session_id,
                     },
                 ))?;
-        }
 
-        if let Some(err) = stop_error {
-            return Err(err);
+            let bytes_to_release = stop_result?;
+
+            // Dropping a session frees buffer space just like popping messages.
+            // Return its credit on this connection while the state is locked:
+            // losing a whole ReadResponse's credit can otherwise stall the stream.
+            if bytes_to_release > 0 {
+                active
+                    .connection
+                    .send(RawFromClientOneOf::ReadRequest(RawReadRequest {
+                        bytes_size: bytes_to_release,
+                    }))?;
+            }
         }
 
         Ok(())
@@ -641,6 +653,153 @@ mod tests {
         let batch = runtime.pop_batch(10).await.expect("pop should succeed");
         assert_eq!(batch.messages.len(), 1);
         assert_eq!(batch.messages[0].get_commit_marker().epoch, 1);
+    }
+
+    #[tokio::test]
+    async fn stopping_credit_owner_replenishes_stream_for_other_partitions() {
+        const WINDOW: i64 = 1024 * 1024;
+
+        for graceful in [false, true] {
+            for ended in [false, true] {
+                let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
+                let runtime = RuntimeHandle::with_connection(Connection::new(outgoing_tx, 7));
+                for session_id in [10, 11] {
+                    runtime
+                        .handle_from_server(RawFromServer::StartPartitionSessionRequest(
+                            stream_read_message::StartPartitionSessionRequest {
+                                partition_session: Some(stream_read_message::PartitionSession {
+                                    partition_session_id: session_id,
+                                    partition_id: session_id,
+                                    path: "test-topic".into(),
+                                }),
+                                ..Default::default()
+                            }
+                            .into(),
+                        ))
+                        .unwrap();
+                    assert!(matches!(
+                        outgoing_rx.try_recv(),
+                        Ok(RawFromClientOneOf::StartPartitionSessionResponse(_))
+                    ));
+                }
+
+                // A response spends the whole stream window. Only its last
+                // message, on session 11, owns the replacement credit.
+                runtime
+                    .handle_from_server(RawFromServer::ReadResponse(RawReadResponse {
+                        bytes_size: WINDOW,
+                        partition_data: vec![
+                            RawPartitionData {
+                                partition_session_id: psid(10),
+                                batches: VecDeque::from([raw_batch(0)]),
+                            },
+                            RawPartitionData {
+                                partition_session_id: psid(11),
+                                batches: VecDeque::from([raw_batch(WINDOW)]),
+                            },
+                        ],
+                    }))
+                    .unwrap();
+                if ended {
+                    runtime
+                        .handle_from_server(RawFromServer::EndPartitionSession(
+                            RawEndPartitionSession {
+                                partition_session_id: psid(11),
+                                child_partition_ids: vec![pid(12)],
+                                adjacent_partition_ids: Vec::new(),
+                            },
+                        ))
+                        .unwrap();
+                }
+                let stop = || RawStopPartitionSessionRequest {
+                    partition_session_id: psid(11),
+                    graceful,
+                    committed_offset: 0,
+                };
+                runtime
+                    .handle_from_server(RawFromServer::StopPartitionSessionRequest(stop()))
+                    .unwrap();
+                assert!(matches!(
+                    outgoing_rx.try_recv(),
+                    Ok(RawFromClientOneOf::StopPartitionSessionResponse(response))
+                        if response.partition_session_id == psid(11)
+                ));
+                assert!(matches!(
+                    outgoing_rx.try_recv(),
+                    Ok(RawFromClientOneOf::ReadRequest(request)) if request.bytes_size == WINDOW
+                ));
+                runtime
+                    .handle_from_server(RawFromServer::StopPartitionSessionRequest(stop()))
+                    .unwrap();
+                assert!(matches!(
+                    outgoing_rx.try_recv(),
+                    Ok(RawFromClientOneOf::StopPartitionSessionResponse(_))
+                ));
+                assert!(
+                    outgoing_rx.try_recv().is_err(),
+                    "credit must be returned once"
+                );
+
+                let batch = runtime.pop_batch(1).await.unwrap();
+                assert_eq!(batch.partition_id(), 10);
+                assert!(outgoing_rx.try_recv().is_err());
+
+                // The simulated server can now spend the returned window on
+                // the surviving session; consuming it returns credit normally.
+                runtime
+                    .handle_from_server(RawFromServer::ReadResponse(raw_read_response(
+                        psid(10),
+                        WINDOW,
+                    )))
+                    .unwrap();
+                let next = runtime.pop_batch(1).await.unwrap();
+                assert_eq!(next.partition_id(), 10);
+                assert_eq!(next.get_commit_marker().epoch, 7);
+                assert!(matches!(
+                    outgoing_rx.try_recv(),
+                    Ok(RawFromClientOneOf::ReadRequest(request)) if request.bytes_size == WINDOW
+                ));
+                assert!(outgoing_rx.try_recv().is_err());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn stopping_partially_consumed_session_returns_only_buffered_credit() {
+        let (runtime, mut outgoing_rx) = runtime_with_epoch(3);
+        runtime.pop_batch(1).await.unwrap(); // Remove the activation message.
+        for bytes in [17, 0, 54] {
+            runtime
+                .handle_from_server(RawFromServer::ReadResponse(raw_read_response(
+                    psid(10),
+                    bytes,
+                )))
+                .unwrap();
+        }
+        runtime.pop_batch(2).await.unwrap();
+        assert!(matches!(
+            outgoing_rx.try_recv(),
+            Ok(RawFromClientOneOf::ReadRequest(request)) if request.bytes_size == 17
+        ));
+        runtime
+            .handle_from_server(RawFromServer::StopPartitionSessionRequest(
+                RawStopPartitionSessionRequest {
+                    partition_session_id: psid(10),
+                    graceful: false,
+                    committed_offset: 0,
+                },
+            ))
+            .unwrap();
+        assert!(matches!(
+            outgoing_rx.try_recv(),
+            Ok(RawFromClientOneOf::StopPartitionSessionResponse(_))
+        ));
+        assert!(matches!(
+            outgoing_rx.try_recv(),
+            Ok(RawFromClientOneOf::ReadRequest(request)) if request.bytes_size == 54
+        ));
+        assert!(outgoing_rx.try_recv().is_err());
+        assert!(runtime.commit(commit_marker(3)).is_err());
     }
 
     #[test]
