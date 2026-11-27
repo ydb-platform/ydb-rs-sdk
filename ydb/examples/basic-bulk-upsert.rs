@@ -49,8 +49,7 @@ async fn main() -> YdbResult<()> {
     let read_rows_id: YdbResult<Vec<i64>> = result_set
         .rows()
         .map(|mut row| {
-            let val = row.remove_field_by_name("id")?;
-            let res: i64 = val.try_into()?;
+            let res: i64 = row.take("id")?;
             Ok(res)
         })
         .collect();

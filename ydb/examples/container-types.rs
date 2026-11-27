@@ -24,7 +24,7 @@ async fn main() -> YdbResult<()> {
             .query_row("SELECT $val AS val")
             .params(HashMap::from_iter(vec![("$val".to_string(), source_value)]))
             .await?;
-        let res: Vec<i32> = row.remove_field_by_name("val")?.try_into()?;
+        let res: Vec<i32> = row.take("val")?;
 
         assert_eq!(vec![1, 2, 3], res);
         println!("List: {res:?}");
@@ -42,7 +42,7 @@ async fn main() -> YdbResult<()> {
             .query_row("SELECT $val AS res")
             .params(ydb_params!("$val" => source.clone()))
             .await?;
-        let res: HashMap<String, Value> = row.remove_field_by_name("res")?.try_into()?;
+        let res: HashMap<String, Value> = row.take("res")?;
 
         assert_eq!(source, res);
         println!("Struct: {res:?}");

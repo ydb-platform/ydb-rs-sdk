@@ -28,7 +28,7 @@ async fn main() -> YdbResult<()> {
     // --- ImplicitTx (default): server infers isolation from SQL ----------------
     // SELECT → snapshot read-only; DML → serializable read-write; DDL → non-transactional.
     let mut row = idem_row(qc.query_row("SELECT 1 AS one")).await?;
-    let one: i64 = row.remove_field_by_name("one")?.try_into()?;
+    let one: i64 = row.take("one")?;
     println!("implicit SELECT → {one}");
 
     idem_exec(
@@ -47,7 +47,7 @@ async fn main() -> YdbResult<()> {
     ] {
         match idem_row(qc.query_row("SELECT 42 AS v").with_tx_mode(mode)).await {
             Ok(mut row) => {
-                let v: i64 = row.remove_field_by_name("v")?.try_into()?;
+                let v: i64 = row.take("v")?;
                 println!("one-shot {label} SELECT → {v}");
             }
             Err(err)
@@ -69,7 +69,7 @@ async fn main() -> YdbResult<()> {
         let v: i64 = match qc
             .retry_tx(closure!(async |tx: &mut Transaction| {
                 let mut row = tx.query_row("SELECT 42 AS v").await?;
-                Ok(row.remove_field_by_name("v")?.try_into()?)
+                Ok(row.take("v")?)
             }))
             .isolation(mode)
             .timeout(EXAMPLE_TIMEOUT)

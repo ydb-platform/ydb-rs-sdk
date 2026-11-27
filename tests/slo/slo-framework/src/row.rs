@@ -53,7 +53,7 @@ where
     T: TryFrom<Value, Error = YdbError>,
     Option<T>: TryFrom<Value, Error = YdbError>,
 {
-    row.remove_field_by_name(name)
+    row.take::<Value, _>(name)
         .map_err(|err: YdbError| err.to_string())?
         .try_into()
         .map_err(|err: YdbError| err.to_string())

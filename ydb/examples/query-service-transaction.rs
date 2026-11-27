@@ -27,7 +27,7 @@ enum Withdraw {
 /// ORM adapter stays decoupled from the concrete type.
 async fn fetch_total(e: &mut impl QueryExecutor) -> YdbResult<i64> {
     let mut row = e.query_row("SELECT SUM(id) AS s FROM test").await?;
-    row.remove_field_by_name("s")?.try_into()
+    row.take("s")
 }
 
 #[tokio::main]
@@ -84,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .query_row("SELECT balance FROM accounts WHERE id = $id")
                 .param("$id", 1_i64)
                 .await?;
-            let balance: i64 = row.remove_field_by_name("balance")?.try_into()?;
+            let balance: i64 = row.take("balance")?;
 
             if balance < 100 {
                 tx.rollback().await?;
@@ -163,7 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?; // retry_tx commit is a no-op
 
     let mut row = idem_row(qc.query_row(format!("SELECT val FROM {table} WHERE id = 1"))).await?;
-    let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
+    let val: Option<i64> = row.take("val")?;
     println!("with_commit persisted val = {val:?}");
 
     // --- 7. What does NOT compile (by design) -------------------------------

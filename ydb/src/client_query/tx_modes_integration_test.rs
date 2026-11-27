@@ -44,7 +44,7 @@ macro_rules! client_mode_select {
             let mut qc = client.query_client();
 
             let mut row = idem!(qc.query_row("SELECT 42 AS v").with_tx_mode($mode)).await?;
-            let v: i64 = row.remove_field_by_name("v")?.try_into()?;
+            let v: i64 = row.take("v")?;
             assert_eq!(v, 42);
             Ok(())
         }
@@ -59,7 +59,7 @@ async fn query_client_implicit_tx_select() -> YdbResult<()> {
     let mut qc = client.query_client();
 
     let mut row = idem!(qc.query_row("SELECT 42 AS v")).await?;
-    let v: i64 = row.remove_field_by_name("v")?.try_into()?;
+    let v: i64 = row.take("v")?;
     assert_eq!(v, 42);
     Ok(())
 }
@@ -87,7 +87,7 @@ async fn query_client_implicit_tx_ddl_and_dml() -> YdbResult<()> {
     .await?;
 
     let mut row = idem!(qc.query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))).await?;
-    let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
+    let val: Option<i64> = row.take("val")?;
     assert_eq!(val, Some(7));
 
     idem!(qc.exec(format!("DROP TABLE {table_name}"))).await?;
@@ -116,7 +116,7 @@ async fn query_client_snapshot_rw_one_shot() -> YdbResult<()> {
     .await
     {
         Ok(mut row) => {
-            let v: i64 = row.remove_field_by_name("v")?.try_into()?;
+            let v: i64 = row.take("v")?;
             assert_eq!(v, 42);
         }
         Err(err) if is_snapshot_rw_unsupported(&err) => {
@@ -139,7 +139,7 @@ macro_rules! interactive_mode_select {
             let v: i64 = qc
                 .retry_tx(closure!(async |tx: &mut Transaction| {
                     let mut row = tx.query_row("SELECT 42 AS v").await?;
-                    Ok(row.remove_field_by_name("v")?.try_into()?)
+                    Ok(row.take("v")?)
                 }))
                 .isolation($mode)
                 .timeout(TEST_TIMEOUT)
@@ -163,7 +163,7 @@ async fn query_tx_snapshot_rw() -> YdbResult<()> {
     match qc
         .retry_tx(closure!(async |tx: &mut Transaction| {
             let mut row = tx.query_row("SELECT 42 AS v").await?;
-            let v: i64 = row.remove_field_by_name("v")?.try_into()?;
+            let v: i64 = row.take("v")?;
             Ok(v)
         }))
         .isolation(TxMode::SnapshotReadWrite)
@@ -216,7 +216,7 @@ async fn query_tx_snapshot_rw_upsert() -> YdbResult<()> {
     }
 
     let mut row = idem!(qc.query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))).await?;
-    let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
+    let val: Option<i64> = row.take("val")?;
     assert_eq!(val, Some(55));
 
     idem!(qc.exec(format!("DROP TABLE {table_name}"))).await?;

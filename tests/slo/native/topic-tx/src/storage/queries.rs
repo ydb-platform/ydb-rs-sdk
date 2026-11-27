@@ -80,7 +80,7 @@ where
     Option<T>: TryFrom<Value, Error = YdbError>,
 {
     let value: Option<T> = row
-        .remove_field_by_name(name)
+        .take::<Value, _>(name)
         .with_context(|| format!("read table column {name}"))?
         .try_into()
         .with_context(|| format!("decode table column {name}"))?;
